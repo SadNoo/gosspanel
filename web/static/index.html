@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>goss 中转面板</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">GS</div>
+          <div>
+            <strong>goss</strong>
+            <span>中转管理台</span>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="主导航">
+          <button class="nav-item active" data-view="overview" type="button">
+            <span class="nav-icon">◆</span>
+            概览
+          </button>
+          <button class="nav-item" data-view="nodes" type="button">
+            <span class="nav-icon">⌁</span>
+            节点
+          </button>
+          <button class="nav-item" data-view="rules" type="button">
+            <span class="nav-icon">↔</span>
+            中转规则
+          </button>
+          <button class="nav-item" data-view="ips" type="button">
+            <span class="nav-icon">◎</span>
+            在线 IP
+          </button>
+          <button class="nav-item" data-view="certs" type="button">
+            <span class="nav-icon">□</span>
+            证书
+          </button>
+        </nav>
+
+        <div class="side-panel">
+          <span class="muted">当前策略</span>
+          <strong>故障转移优先</strong>
+          <div class="strategy-line">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Production / Asia Edge</p>
+            <h1>中转与隧道管理</h1>
+          </div>
+          <div class="top-actions">
+            <label class="search">
+              <span>⌕</span>
+              <input id="globalSearch" type="search" placeholder="搜索节点、规则、IP">
+            </label>
+            <button class="icon-button" type="button" title="刷新数据">↻</button>
+            <button class="primary-button" id="openRuleModal" type="button">
+              <span>＋</span>
+              新建规则
+            </button>
+          </div>
+        </header>
+
+        <section class="view active" id="overview">
+          <div class="metric-grid">
+            <article class="metric accent-green">
+              <span>在线节点</span>
+              <strong>8 / 9</strong>
+              <small>HK5 正在重连</small>
+            </article>
+            <article class="metric accent-blue">
+              <span>活跃连接</span>
+              <strong>12,846</strong>
+              <small>较 1 小时前 +8.2%</small>
+            </article>
+            <article class="metric accent-violet">
+              <span>今日流量</span>
+              <strong>4.72 TB</strong>
+              <small>入口 2.1 TB / 出口 2.6 TB</small>
+            </article>
+            <article class="metric accent-amber">
+              <span>真实 IP 捕获</span>
+              <strong>98.6%</strong>
+              <small>Proxy Protocol v2</small>
+            </article>
+          </div>
+
+          <div class="overview-layout">
+            <section class="panel network-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>实时拓扑</h2>
+                  <p>入口节点、策略组和落地节点的当前状态</p>
+                </div>
+                <div class="segmented">
+                  <button class="active" type="button">延迟</button>
+                  <button type="button">流量</button>
+                </div>
+              </div>
+              <div class="topology" aria-label="实时拓扑图">
+                <div class="topology-col">
+                  <span class="topology-label">入口</span>
+                  <div class="node-dot online">SG1</div>
+                  <div class="node-dot online">JP2</div>
+                  <div class="node-dot warning">HK5</div>
+                </div>
+                <div class="flow-lines">
+                  <span class="line strong"></span>
+                  <span class="line"></span>
+                  <span class="line calm"></span>
+                </div>
+                <div class="topology-col center">
+                  <span class="topology-label">策略</span>
+                  <div class="policy-core">
+                    <strong>Fallback</strong>
+                    <small>IP hash + 健康检查</small>
+                  </div>
+                </div>
+                <div class="flow-lines">
+                  <span class="line calm"></span>
+                  <span class="line strong"></span>
+                  <span class="line"></span>
+                </div>
+                <div class="topology-col">
+                  <span class="topology-label">出口</span>
+                  <div class="node-dot online">US-LA</div>
+                  <div class="node-dot online">DE-FRA</div>
+                  <div class="node-dot online">NL-AMS</div>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel event-panel">
+              <div class="panel-head compact">
+                <h2>事件</h2>
+                <button class="ghost-button" type="button">查看全部</button>
+              </div>
+              <div class="event-list" id="eventList"></div>
+            </section>
+          </div>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>重点规则</h2>
+                <p>按连接数和异常状态排序</p>
+              </div>
+              <button class="ghost-button" data-view-jump="rules" type="button">进入规则</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>入口</th>
+                    <th>出口</th>
+                    <th>协议</th>
+                    <th>Proxy Protocol</th>
+                    <th>连接</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody id="overviewRules"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="nodes">
+          <div class="page-head">
+            <div>
+              <h2>节点管理</h2>
+              <p>注册、分组、健康检查和 Agent 状态</p>
+            </div>
+            <button class="primary-button" type="button">
+              <span>＋</span>
+              添加节点
+            </button>
+          </div>
+          <div class="node-grid" id="nodeGrid"></div>
+        </section>
+
+        <section class="view" id="rules">
+          <div class="page-head">
+            <div>
+              <h2>中转规则</h2>
+              <p>入口监听、目标出口、端口段与策略编排</p>
+            </div>
+            <div class="toolbar">
+              <select id="ruleStatusFilter" aria-label="规则状态">
+                <option value="all">全部状态</option>
+                <option value="running">运行中</option>
+                <option value="paused">已暂停</option>
+                <option value="warning">告警</option>
+              </select>
+              <button class="primary-button" id="openRuleModal2" type="button">
+                <span>＋</span>
+                新建规则
+              </button>
+            </div>
+          </div>
+          <div class="table-wrap roomy">
+            <table>
+              <thead>
+                <tr>
+                  <th>规则</th>
+                  <th>入口监听</th>
+                  <th>出口目标</th>
+                  <th>策略</th>
+                  <th>真实 IP</th>
+                  <th>流量</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="ruleTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" id="ips">
+          <div class="page-head">
+            <div>
+              <h2>在线 IP</h2>
+              <p>来自 Proxy Protocol、连接日志和规则统计</p>
+            </div>
+            <div class="toolbar">
+              <select aria-label="时间范围">
+                <option>最近 15 分钟</option>
+                <option>最近 1 小时</option>
+                <option>今天</option>
+              </select>
+              <button class="ghost-button" type="button">导出 CSV</button>
+            </div>
+          </div>
+          <div class="ip-layout">
+            <section class="panel">
+              <div class="panel-head compact">
+                <h2>来源排行</h2>
+              </div>
+              <div class="rank-list" id="ipRank"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head compact">
+                <h2>连接明细</h2>
+              </div>
+              <div class="table-wrap inline">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>真实 IP</th>
+                      <th>入口</th>
+                      <th>规则</th>
+                      <th>连接</th>
+                      <th>最近活跃</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ipTable"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="certs">
+          <div class="page-head">
+            <div>
+              <h2>证书管理</h2>
+              <p>自动申请、续期、部署到 TLS / WSS 中转规则</p>
+            </div>
+            <button class="primary-button" type="button">
+              <span>＋</span>
+              添加证书
+            </button>
+          </div>
+          <div class="cert-grid" id="certGrid"></div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="ruleModal" aria-hidden="true">
+      <form class="modal" aria-label="新建中转规则">
+        <div class="modal-head">
+          <div>
+            <h2>新建中转规则</h2>
+            <p>定义入口监听、出口目标和真实 IP 传递方式</p>
+          </div>
+          <button class="icon-button" id="closeRuleModal" type="button" title="关闭">×</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            规则名称
+            <input id="ruleNameInput" type="text" value="测试 TCP 转发">
+          </label>
+          <label>
+            协议
+            <select id="ruleProtocolInput">
+              <option>TCP</option>
+              <option>TCP + TLS</option>
+              <option>WS + TLS</option>
+              <option>WS</option>
+              <option>SOCKS5</option>
+            </select>
+          </label>
+          <label>
+            监听地址
+            <input id="ruleListenInput" type="text" value=":19090">
+          </label>
+          <label>
+            目标地址
+            <input id="ruleTargetInput" type="text" value="localhost:8080">
+          </label>
+        </div>
+
+        <fieldset class="fieldset">
+          <legend>Proxy Protocol</legend>
+          <div class="switch-row">
+            <div>
+              <strong>向出口发送真实 IP</strong>
+              <span>仅在可信入口节点启用，避免伪造来源</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" checked>
+              <span></span>
+            </label>
+          </div>
+          <div class="segmented wide">
+            <button class="active" type="button">v2</button>
+            <button type="button">v1</button>
+            <button type="button">关闭</button>
+          </div>
+        </fieldset>
+
+        <div class="modal-actions">
+          <button class="ghost-button" id="cancelRuleModal" type="button">取消</button>
+          <button class="primary-button" id="saveRuleButton" type="button">保存规则</button>
+        </div>
+      </form>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

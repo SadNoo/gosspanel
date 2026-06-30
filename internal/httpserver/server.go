@@ -54,6 +54,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/agent/register", s.requireAgent(s.agentRegister))
 	mux.HandleFunc("POST /api/agent/heartbeat", s.requireAgent(s.agentHeartbeat))
 	mux.HandleFunc("GET /api/agent/rules", s.requireAgent(s.agentRules))
+	mux.HandleFunc("POST /api/agent/online-ips", s.requireAgent(s.agentOnlineIPs))
 
 	mux.HandleFunc("GET /api/overview", s.requireAuth(s.overview))
 	mux.HandleFunc("GET /api/nodes", s.requireAuth(s.nodes))
@@ -272,10 +273,18 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		req.LastSeen = time.Now().Format("15:04:05")
 	}
 	role := normalizeNodeRole(req.Role)
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = req.ID
+	}
+	region := strings.TrimSpace(req.Region)
+	if region == "" {
+		region = string(role)
+	}
 	err := s.store.UpsertNode(r.Context(), domain.Node{
 		ID:       req.ID,
-		Name:     req.ID,
-		Region:   string(role),
+		Name:     name,
+		Region:   region,
 		Role:     role,
 		Status:   req.Status,
 		Load:     req.Load,
@@ -293,20 +302,43 @@ func (s *Server) agentRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	relayNodeID := r.URL.Query().Get("relayNodeId")
+	clientNodeID := r.URL.Query().Get("clientNodeId")
 	if relayNodeID == "" {
 		relayNodeID = r.Header.Get("X-Goss-Node-ID")
 	}
-	if relayNodeID == "" {
+	if relayNodeID == "" && clientNodeID == "" {
 		writeJSON(w, http.StatusOK, rules)
 		return
 	}
 	filtered := make([]domain.RelayRule, 0, len(rules))
 	for _, rule := range rules {
-		if rule.RelayNodeID == relayNodeID {
+		if relayNodeID != "" && rule.RelayNodeID == relayNodeID {
+			filtered = append(filtered, rule)
+			continue
+		}
+		if clientNodeID != "" && rule.ClientNodeID == clientNodeID {
 			filtered = append(filtered, rule)
 		}
 	}
 	writeJSON(w, http.StatusOK, filtered)
+}
+
+func (s *Server) agentOnlineIPs(w http.ResponseWriter, r *http.Request) {
+	var req domain.AgentOnlineIPReport
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	for _, item := range req.Items {
+		if item.EntryNode == "" {
+			item.EntryNode = req.NodeID
+		}
+		if err := s.store.RecordOnlineIP(r.Context(), item); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func normalizeNodeRole(role domain.NodeRole) domain.NodeRole {

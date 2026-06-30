@@ -166,10 +166,18 @@ type AgentRegisterRequest struct {
 
 type AgentHeartbeatRequest struct {
 	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Region   string     `json:"region"`
 	Role     NodeRole   `json:"role"`
 	Status   NodeStatus `json:"status"`
 	Load     string     `json:"load"`
 	Latency  string     `json:"latency"`
 	Traffic  string     `json:"traffic"`
 	LastSeen string     `json:"lastSeen"`
+}
+
+type AgentOnlineIPReport struct {
+	NodeID string     `json:"nodeId"`
+	Role   NodeRole   `json:"role"`
+	Items  []OnlineIP `json:"items"`
 }

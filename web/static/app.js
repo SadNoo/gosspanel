@@ -290,6 +290,7 @@ function renderRules() {
             <span>${rule.detail}</span>
           </td>
           <td>${rule.relayNodeId || "未分配"}</td>
+          <td>${rule.clientNodeId || "未绑定"}</td>
           <td>${rule.listen}</td>
           <td>${rule.target}</td>
           <td>${rule.strategy}</td>
@@ -379,6 +380,17 @@ function renderRelayOptions() {
   if (current) select.value = current;
 }
 
+function renderClientOptions() {
+  const select = document.querySelector("#ruleClientNodeInput");
+  if (!select) return;
+  const current = select.value;
+  const options = nodes
+    .map((node) => `<option value="${node.id || node.name}">${node.name} / ${node.region}</option>`)
+    .join("");
+  select.innerHTML = `<option value="">不绑定客户端机器</option>${options}`;
+  if (current) select.value = current;
+}
+
 function renderAll() {
   renderEvents();
   renderOverviewRules();
@@ -389,6 +401,7 @@ function renderAll() {
   renderCerts();
   renderSettings();
   renderRelayOptions();
+  renderClientOptions();
 }
 
 function setSettingsMessage(text, tone = "") {
@@ -434,6 +447,7 @@ document.querySelector("#saveRuleButton").addEventListener("click", async () => 
   const payload = {
     name: document.querySelector("#ruleNameInput").value.trim(),
     relayNodeId: document.querySelector("#ruleRelayNodeInput").value,
+    clientNodeId: document.querySelector("#ruleClientNodeInput").value,
     listen: document.querySelector("#ruleListenInput").value.trim(),
     target: document.querySelector("#ruleTargetInput").value.trim(),
     protocol,

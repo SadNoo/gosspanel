@@ -12,14 +12,17 @@ import (
 	"time"
 
 	"github.com/SadNoo/gosspanel/internal/domain"
-	"github.com/SadNoo/gosspanel/internal/store"
 )
 
+type OnlineIPRecorder interface {
+	RecordOnlineIP(context.Context, domain.OnlineIP) error
+}
+
 type Manager struct {
-	store   store.Store
-	logger  *slog.Logger
-	mu      sync.Mutex
-	running map[string]*listenerState
+	logger   *slog.Logger
+	recorder OnlineIPRecorder
+	mu       sync.Mutex
+	running  map[string]*listenerState
 }
 
 type listenerState struct {
@@ -28,20 +31,15 @@ type listenerState struct {
 	cancel   context.CancelFunc
 }
 
-func NewManager(store store.Store, logger *slog.Logger) *Manager {
+func NewManager(logger *slog.Logger, recorder OnlineIPRecorder) *Manager {
 	return &Manager{
-		store:   store,
-		logger:  logger,
-		running: make(map[string]*listenerState),
+		logger:   logger,
+		recorder: recorder,
+		running:  make(map[string]*listenerState),
 	}
 }
 
-func (m *Manager) Sync(ctx context.Context) error {
-	rules, err := m.store.EnabledRules(ctx)
-	if err != nil {
-		return err
-	}
-
+func (m *Manager) SyncRules(rules []domain.RelayRule) error {
 	want := make(map[string]domain.RelayRule)
 	for _, rule := range rules {
 		if runnable(rule) {
@@ -135,19 +133,28 @@ func (m *Manager) handleConn(ctx context.Context, rule domain.RelayRule, inbound
 	}
 
 	if tcpAddr, ok := sourceAddr.(*net.TCPAddr); ok {
-		_ = m.store.RecordOnlineIP(ctx, domain.OnlineIP{
-			IP:          tcpAddr.IP.String(),
-			EntryNode:   rule.Listen,
-			RuleName:    rule.Name,
-			Connections: 1,
-			LastActive:  time.Now().Format("15:04:05"),
-		})
+		m.recordOnlineIP(ctx, rule, tcpAddr)
 	}
 
 	errCh := make(chan error, 2)
 	go proxyCopy(errCh, outbound, sourceConn)
 	go proxyCopy(errCh, sourceConn, outbound)
 	<-errCh
+}
+
+func (m *Manager) recordOnlineIP(ctx context.Context, rule domain.RelayRule, addr *net.TCPAddr) {
+	if m.recorder == nil {
+		return
+	}
+	if err := m.recorder.RecordOnlineIP(ctx, domain.OnlineIP{
+		IP:          addr.IP.String(),
+		EntryNode:   rule.Listen,
+		RuleName:    rule.Name,
+		Connections: 1,
+		LastActive:  time.Now().Format("15:04:05"),
+	}); err != nil {
+		m.logger.Warn("online ip report failed", "rule", rule.Name, "ip", addr.IP.String(), "error", err)
+	}
 }
 
 func runnable(rule domain.RelayRule) bool {

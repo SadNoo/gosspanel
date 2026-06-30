@@ -17,7 +17,7 @@ type SQLite struct {
 	db *sql.DB
 }
 
-func OpenSQLite(ctx context.Context, path string) (*SQLite, error) {
+func OpenSQLite(ctx context.Context, path string, adminUser string, adminPassword string) (*SQLite, error) {
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, err
@@ -29,7 +29,7 @@ func OpenSQLite(ctx context.Context, path string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := s.seed(ctx); err != nil {
+	if err := s.seed(ctx, adminUser, adminPassword); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -93,6 +93,12 @@ func (s *SQLite) migrate(ctx context.Context) error {
 			body TEXT NOT NULL,
 			time TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS admin_settings (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			username TEXT NOT NULL,
+			password TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 	}
 
 	for _, stmt := range stmts {
@@ -103,8 +109,23 @@ func (s *SQLite) migrate(ctx context.Context) error {
 	return nil
 }
 
-func (s *SQLite) seed(ctx context.Context) error {
+func (s *SQLite) seed(ctx context.Context, adminUser string, adminPassword string) error {
 	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_settings`).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		if adminUser == "" {
+			adminUser = "admin"
+		}
+		if adminPassword == "" {
+			adminPassword = "admin"
+		}
+		if err := s.UpdateAdminSettings(ctx, domain.AdminSettings{Username: adminUser, Password: adminPassword}); err != nil {
+			return err
+		}
+	}
+
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes`).Scan(&count); err != nil {
 		return err
 	}
@@ -432,6 +453,30 @@ func (s *SQLite) AddEvent(ctx context.Context, event domain.Event) error {
 		event.Time = nowLabel()
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO events (level, title, body, time) VALUES (?, ?, ?, ?)`, event.Level, event.Title, event.Body, event.Time)
+	return err
+}
+
+func (s *SQLite) AdminSettings(ctx context.Context) (domain.AdminSettings, error) {
+	var settings domain.AdminSettings
+	err := s.db.QueryRowContext(ctx, `SELECT username, password FROM admin_settings WHERE id = 1`).Scan(&settings.Username, &settings.Password)
+	return settings, err
+}
+
+func (s *SQLite) UpdateAdminSettings(ctx context.Context, settings domain.AdminSettings) error {
+	if settings.Username == "" {
+		return errors.New("username is required")
+	}
+	if settings.Password == "" {
+		return errors.New("password is required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO admin_settings (id, username, password, updated_at)
+		VALUES (1, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			username = excluded.username,
+			password = excluded.password,
+			updated_at = excluded.updated_at`,
+		settings.Username, settings.Password, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 

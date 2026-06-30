@@ -34,7 +34,7 @@ func main() {
 	}
 
 	cfg := config.FromEnv()
-	sqlStore, err := store.OpenSQLite(ctx, cfg.DataPath)
+	sqlStore, err := store.OpenSQLite(ctx, cfg.DataPath, cfg.AdminUser, cfg.AdminPassword)
 	if err != nil {
 		logger.Error("store failed", "error", err)
 		os.Exit(1)

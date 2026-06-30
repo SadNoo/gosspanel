@@ -1,6 +1,8 @@
 package httpserver
 
 import (
+	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -49,6 +51,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.me))
+	mux.HandleFunc("GET /api/settings/account", s.requireAuth(s.accountSettings))
+	mux.HandleFunc("PUT /api/settings/account", s.requireAuth(s.updateAccountSettings))
 
 	mux.HandleFunc("POST /api/agent/register", s.requireAgent(s.agentRegister))
 	mux.HandleFunc("POST /api/agent/heartbeat", s.requireAgent(s.agentHeartbeat))
@@ -99,7 +103,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		req.User = r.Form.Get("user")
 		req.Password = r.Form.Get("password")
 	}
-	if !s.auth.CheckPassword(req.User, req.Password) {
+	if !s.checkPassword(r.Context(), req.User, req.Password) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid user or password"))
 		return
 	}
@@ -119,6 +123,50 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	user, _ := s.auth.User(r)
 	writeJSON(w, http.StatusOK, map[string]string{"user": user})
+}
+
+func (s *Server) accountSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.store.AdminSettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"username": settings.Username})
+}
+
+func (s *Server) updateAccountSettings(w http.ResponseWriter, r *http.Request) {
+	var req domain.AccountUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	current, err := s.store.AdminSettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !constantStringEqual(req.CurrentPassword, current.Password) {
+		writeError(w, http.StatusForbidden, errors.New("current password is invalid"))
+		return
+	}
+	if strings.TrimSpace(req.Username) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("username is required"))
+		return
+	}
+	next := domain.AdminSettings{
+		Username: strings.TrimSpace(req.Username),
+		Password: current.Password,
+	}
+	if req.NewPassword != "" {
+		next.Password = req.NewPassword
+	}
+	if err := s.store.UpdateAdminSettings(r.Context(), next); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.auth.SetSession(w, next.Username)
+	_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "账号设置已更新", Body: next.Username, Time: time.Now().Format("15:04:05")})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "username": next.Username})
 }
 
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
@@ -277,6 +325,14 @@ func (s *Server) requireAgent(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (s *Server) checkPassword(ctx context.Context, user string, password string) bool {
+	settings, err := s.store.AdminSettings(ctx)
+	if err != nil {
+		return false
+	}
+	return constantStringEqual(user, settings.Username) && constantStringEqual(password, settings.Password)
+}
+
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -322,6 +378,10 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func constantStringEqual(a string, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 const loginHTML = `<!doctype html>

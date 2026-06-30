@@ -38,6 +38,10 @@
             <span class="nav-icon">□</span>
             证书
           </button>
+          <button class="nav-item" data-view="settings" type="button">
+            <span class="nav-icon">⚙</span>
+            设置
+          </button>
         </nav>
 
         <div class="side-panel">
@@ -282,6 +286,41 @@
             </button>
           </div>
           <div class="cert-grid" id="certGrid"></div>
+        </section>
+
+        <section class="view" id="settings">
+          <div class="page-head">
+            <div>
+              <h2>设置</h2>
+              <p>管理面板登录账号</p>
+            </div>
+          </div>
+          <section class="panel settings-panel">
+            <div class="panel-head">
+              <div>
+                <h2>账号设置</h2>
+                <p>修改用户名或密码后会自动刷新当前登录状态</p>
+              </div>
+            </div>
+            <div class="form-grid account-form">
+              <label>
+                用户名
+                <input id="settingsUsername" type="text" autocomplete="username">
+              </label>
+              <label>
+                新密码
+                <input id="settingsNewPassword" type="password" placeholder="留空则不修改" autocomplete="new-password">
+              </label>
+              <label class="full-span">
+                当前密码
+                <input id="settingsCurrentPassword" type="password" autocomplete="current-password">
+              </label>
+            </div>
+            <div class="settings-actions">
+              <span id="settingsMessage" class="settings-message"></span>
+              <button class="primary-button" id="saveAccountSettings" type="button">保存账号设置</button>
+            </div>
+          </section>
         </section>
       </main>
     </div>

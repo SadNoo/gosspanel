@@ -78,6 +78,10 @@ let certs = [
   { name: "hk5.example.net", issuer: "Let's Encrypt / HTTP-01", days: 19, used: "HK5 入口" }
 ];
 
+let accountSettings = {
+  username: ""
+};
+
 const statusText = {
   running: "运行中",
   warning: "告警",
@@ -89,6 +93,7 @@ const views = document.querySelectorAll(".view");
 const globalSearch = document.querySelector("#globalSearch");
 const ruleStatusFilter = document.querySelector("#ruleStatusFilter");
 const ruleModal = document.querySelector("#ruleModal");
+const settingsMessage = document.querySelector("#settingsMessage");
 
 function setView(viewId) {
   navButtons.forEach((button) => {
@@ -157,10 +162,11 @@ function normalizeRule(rule) {
 }
 
 async function loadData() {
-  const [overview, onlineIps, certificates] = await Promise.all([
+  const [overview, onlineIps, certificates, account] = await Promise.all([
     apiFetch("/api/overview"),
     apiFetch("/api/online-ips"),
-    apiFetch("/api/certificates")
+    apiFetch("/api/certificates"),
+    apiFetch("/api/settings/account")
   ]);
   if (!overview) return;
   nodes = overview.nodes || [];
@@ -180,6 +186,7 @@ async function loadData() {
     days: cert.daysLeft,
     used: cert.usedBy
   }));
+  accountSettings = account || accountSettings;
 }
 
 function filteredRules() {
@@ -321,6 +328,13 @@ function renderCerts() {
     .join("");
 }
 
+function renderSettings() {
+  const usernameInput = document.querySelector("#settingsUsername");
+  if (usernameInput && document.activeElement !== usernameInput) {
+    usernameInput.value = accountSettings.username || "";
+  }
+}
+
 function renderAll() {
   renderEvents();
   renderOverviewRules();
@@ -328,6 +342,13 @@ function renderAll() {
   renderRules();
   renderIps();
   renderCerts();
+  renderSettings();
+}
+
+function setSettingsMessage(text, tone = "") {
+  if (!settingsMessage) return;
+  settingsMessage.textContent = text;
+  settingsMessage.className = `settings-message ${tone}`.trim();
 }
 
 function openModal() {
@@ -386,6 +407,29 @@ document.querySelector("#saveRuleButton").addEventListener("click", async () => 
   closeModal();
   await loadData();
   renderAll();
+});
+
+document.querySelector("#saveAccountSettings").addEventListener("click", async () => {
+  setSettingsMessage("正在保存...");
+  const payload = {
+    username: document.querySelector("#settingsUsername").value.trim(),
+    currentPassword: document.querySelector("#settingsCurrentPassword").value,
+    newPassword: document.querySelector("#settingsNewPassword").value
+  };
+  try {
+    const result = await apiFetch("/api/settings/account", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+    if (!result) return;
+    accountSettings.username = result.username;
+    document.querySelector("#settingsCurrentPassword").value = "";
+    document.querySelector("#settingsNewPassword").value = "";
+    setSettingsMessage("账号设置已保存", "success");
+    renderSettings();
+  } catch (error) {
+    setSettingsMessage(error.message, "error");
+  }
 });
 ruleModal.addEventListener("click", (event) => {
   if (event.target === ruleModal) closeModal();

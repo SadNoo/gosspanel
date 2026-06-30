@@ -845,6 +845,40 @@ input[type="text"] {
   margin-top: 18px;
 }
 
+.settings-panel {
+  max-width: 760px;
+}
+
+.account-form {
+  max-width: 680px;
+}
+
+.full-span {
+  grid-column: 1 / -1;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.settings-message {
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-message.success {
+  color: var(--green);
+}
+
+.settings-message.error {
+  color: var(--red);
+}
+
 @media (max-width: 1100px) {
   .metric-grid,
   .node-grid,
@@ -869,7 +903,7 @@ input[type="text"] {
   }
 
   .nav {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .nav-item {
@@ -929,6 +963,11 @@ input[type="text"] {
   .ghost-button {
     justify-content: center;
     flex: 1;
+  }
+
+  .settings-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .health {

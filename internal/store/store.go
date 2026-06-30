@@ -22,4 +22,6 @@ type Store interface {
 	Certificates(context.Context) ([]domain.Certificate, error)
 	Events(context.Context) ([]domain.Event, error)
 	AddEvent(context.Context, domain.Event) error
+	AdminSettings(context.Context) (domain.AdminSettings, error)
+	UpdateAdminSettings(context.Context, domain.AdminSettings) error
 }

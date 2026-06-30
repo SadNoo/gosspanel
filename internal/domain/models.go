@@ -81,10 +81,10 @@ type RelayRule struct {
 	Outbound      RelayProtocol       `json:"outbound"`
 	Strategy      StrategyKind        `json:"strategy"`
 	ProxyProtocol ProxyProtocolConfig `json:"proxyProtocol"`
-	Traffic        string              `json:"traffic"`
-	Connections    int                 `json:"connections"`
-	Status         RuleStatus          `json:"status"`
-	Enabled        bool                `json:"enabled"`
+	Traffic       string              `json:"traffic"`
+	Connections   int                 `json:"connections"`
+	Status        RuleStatus          `json:"status"`
+	Enabled       bool                `json:"enabled"`
 }
 
 type RuleInput struct {
@@ -96,8 +96,8 @@ type RuleInput struct {
 	Outbound      RelayProtocol       `json:"outbound"`
 	Strategy      StrategyKind        `json:"strategy"`
 	ProxyProtocol ProxyProtocolConfig `json:"proxyProtocol"`
-	Status         RuleStatus          `json:"status"`
-	Enabled        bool                `json:"enabled"`
+	Status        RuleStatus          `json:"status"`
+	Enabled       bool                `json:"enabled"`
 }
 
 type OnlineIP struct {
@@ -132,6 +132,17 @@ type Overview struct {
 	Nodes             []Node      `json:"nodes"`
 	Rules             []RelayRule `json:"rules"`
 	Events            []Event     `json:"events"`
+}
+
+type AdminSettings struct {
+	Username string `json:"username"`
+	Password string `json:"-"`
+}
+
+type AccountUpdateRequest struct {
+	Username        string `json:"username"`
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
 }
 
 type AgentRegisterRequest struct {

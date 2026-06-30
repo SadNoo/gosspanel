@@ -8,6 +8,13 @@ const (
 	NodeStatusPaused  NodeStatus = "paused"
 )
 
+type NodeRole string
+
+const (
+	NodeRoleClient NodeRole = "client"
+	NodeRoleRelay  NodeRole = "relay"
+)
+
 type RuleStatus string
 
 const (
@@ -64,6 +71,7 @@ type Node struct {
 	ID       string     `json:"id"`
 	Name     string     `json:"name"`
 	Region   string     `json:"region"`
+	Role     NodeRole   `json:"role"`
 	Status   NodeStatus `json:"status"`
 	Load     string     `json:"load"`
 	Latency  string     `json:"latency"`
@@ -74,6 +82,8 @@ type Node struct {
 type RelayRule struct {
 	ID            string              `json:"id"`
 	Name          string              `json:"name"`
+	RelayNodeID   string              `json:"relayNodeId"`
+	ClientNodeID  string              `json:"clientNodeId"`
 	Listen        string              `json:"listen"`
 	Target        string              `json:"target"`
 	Protocol      string              `json:"protocol"`
@@ -89,6 +99,8 @@ type RelayRule struct {
 
 type RuleInput struct {
 	Name          string              `json:"name"`
+	RelayNodeID   string              `json:"relayNodeId"`
+	ClientNodeID  string              `json:"clientNodeId"`
 	Listen        string              `json:"listen"`
 	Target        string              `json:"target"`
 	Protocol      string              `json:"protocol"`
@@ -146,13 +158,15 @@ type AccountUpdateRequest struct {
 }
 
 type AgentRegisterRequest struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Region string `json:"region"`
+	ID     string   `json:"id"`
+	Name   string   `json:"name"`
+	Region string   `json:"region"`
+	Role   NodeRole `json:"role"`
 }
 
 type AgentHeartbeatRequest struct {
 	ID       string     `json:"id"`
+	Role     NodeRole   `json:"role"`
 	Status   NodeStatus `json:"status"`
 	Load     string     `json:"load"`
 	Latency  string     `json:"latency"`

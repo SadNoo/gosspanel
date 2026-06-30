@@ -24,7 +24,11 @@
           </button>
           <button class="nav-item" data-view="nodes" type="button">
             <span class="nav-icon">⌁</span>
-            节点
+            客户端机器
+          </button>
+          <button class="nav-item" data-view="relays" type="button">
+            <span class="nav-icon">⇄</span>
+            中转机器
           </button>
           <button class="nav-item" data-view="rules" type="button">
             <span class="nav-icon">↔</span>
@@ -182,8 +186,8 @@
         <section class="view" id="nodes">
           <div class="page-head">
             <div>
-              <h2>节点管理</h2>
-              <p>注册、分组、健康检查和 Agent 状态</p>
+              <h2>客户端机器管理</h2>
+              <p>客户端机器接入、健康检查和 Agent 状态</p>
             </div>
             <button class="primary-button" type="button">
               <span>＋</span>
@@ -191,6 +195,20 @@
             </button>
           </div>
           <div class="node-grid" id="nodeGrid"></div>
+        </section>
+
+        <section class="view" id="relays">
+          <div class="page-head">
+            <div>
+              <h2>中转机器管理</h2>
+              <p>真正执行中转规则的机器后端，由面板统一下发规则</p>
+            </div>
+            <button class="primary-button" type="button">
+              <span>＋</span>
+              接入中转机器
+            </button>
+          </div>
+          <div class="node-grid" id="relayMachineGrid"></div>
         </section>
 
         <section class="view" id="rules">
@@ -217,6 +235,7 @@
               <thead>
                 <tr>
                   <th>规则</th>
+                  <th>中转机器</th>
                   <th>入口监听</th>
                   <th>出口目标</th>
                   <th>策略</th>
@@ -349,6 +368,10 @@
               <option>WS</option>
               <option>SOCKS5</option>
             </select>
+          </label>
+          <label>
+            中转机器
+            <select id="ruleRelayNodeInput"></select>
           </label>
           <label>
             监听地址

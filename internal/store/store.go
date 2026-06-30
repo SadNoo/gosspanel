@@ -10,6 +10,7 @@ type Store interface {
 	Close() error
 	Overview(context.Context) (domain.Overview, error)
 	Nodes(context.Context) ([]domain.Node, error)
+	NodesByRole(context.Context, domain.NodeRole) ([]domain.Node, error)
 	UpsertNode(context.Context, domain.Node) error
 	Rules(context.Context) ([]domain.RelayRule, error)
 	EnabledRules(context.Context) ([]domain.RelayRule, error)

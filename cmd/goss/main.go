@@ -13,7 +13,6 @@ import (
 	"github.com/SadNoo/gosspanel/internal/agent"
 	"github.com/SadNoo/gosspanel/internal/config"
 	"github.com/SadNoo/gosspanel/internal/httpserver"
-	"github.com/SadNoo/gosspanel/internal/relay"
 	"github.com/SadNoo/gosspanel/internal/store"
 )
 
@@ -41,14 +40,7 @@ func main() {
 	}
 	defer sqlStore.Close()
 
-	relayMgr := relay.NewManager(sqlStore, logger)
-	defer relayMgr.Close()
-	if err := relayMgr.Sync(ctx); err != nil {
-		logger.Error("relay sync failed", "error", err)
-		os.Exit(1)
-	}
-
-	server := httpserver.New(cfg, sqlStore, relayMgr, logger)
+	server := httpserver.New(cfg, sqlStore, logger)
 
 	errCh := make(chan error, 1)
 	go func() {

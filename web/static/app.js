@@ -7,6 +7,10 @@ let nodes = [
   { name: "NL-AMS", region: "Amsterdam", status: "running", load: "28%", latency: "176 ms", traffic: "391 GB" }
 ];
 
+let relayMachines = [
+  { name: "Relay Demo", region: "Relay", status: "warning", load: "0%", latency: "-", traffic: "0 B" }
+];
+
 let rules = [
   {
     name: "HK 游戏端口段",
@@ -162,14 +166,16 @@ function normalizeRule(rule) {
 }
 
 async function loadData() {
-  const [overview, onlineIps, certificates, account] = await Promise.all([
+  const [overview, relayMachineItems, onlineIps, certificates, account] = await Promise.all([
     apiFetch("/api/overview"),
+    apiFetch("/api/relay-machines"),
     apiFetch("/api/online-ips"),
     apiFetch("/api/certificates"),
     apiFetch("/api/settings/account")
   ]);
   if (!overview) return;
   nodes = overview.nodes || [];
+  relayMachines = relayMachineItems || [];
   rules = (overview.rules || []).map(normalizeRule);
   events = overview.events || [];
   ips = (onlineIps || []).map((item, index) => ({
@@ -248,6 +254,32 @@ function renderNodes() {
     .join("");
 }
 
+function renderRelayMachines() {
+  const keyword = globalSearch.value.trim().toLowerCase();
+  const visibleRelays = relayMachines.filter((node) => `${node.name} ${node.region}`.toLowerCase().includes(keyword));
+
+  document.querySelector("#relayMachineGrid").innerHTML = visibleRelays
+    .map(
+      (node) => `
+        <article class="node-card">
+          <div class="node-card-head">
+            <div class="node-title">
+              <strong>${node.name}</strong>
+              <span>${node.region}</span>
+            </div>
+            ${statusBadge(node.status)}
+          </div>
+          <div class="health">
+            <div><span>角色</span><strong>中转</strong></div>
+            <div><span>延迟</span><strong>${node.latency}</strong></div>
+            <div><span>流量</span><strong>${node.traffic}</strong></div>
+          </div>
+        </article>
+      `
+    )
+    .join("");
+}
+
 function renderRules() {
   document.querySelector("#ruleTable").innerHTML = filteredRules()
     .map(
@@ -257,6 +289,7 @@ function renderRules() {
             <strong>${rule.name}</strong>
             <span>${rule.detail}</span>
           </td>
+          <td>${rule.relayNodeId || "未分配"}</td>
           <td>${rule.listen}</td>
           <td>${rule.target}</td>
           <td>${rule.strategy}</td>
@@ -335,14 +368,27 @@ function renderSettings() {
   }
 }
 
+function renderRelayOptions() {
+  const select = document.querySelector("#ruleRelayNodeInput");
+  if (!select) return;
+  const current = select.value;
+  const options = relayMachines
+    .map((node) => `<option value="${node.id || node.name}">${node.name} / ${node.region}</option>`)
+    .join("");
+  select.innerHTML = options || `<option value="">暂无中转机器</option>`;
+  if (current) select.value = current;
+}
+
 function renderAll() {
   renderEvents();
   renderOverviewRules();
   renderNodes();
+  renderRelayMachines();
   renderRules();
   renderIps();
   renderCerts();
   renderSettings();
+  renderRelayOptions();
 }
 
 function setSettingsMessage(text, tone = "") {
@@ -371,6 +417,7 @@ document.querySelectorAll("[data-view-jump]").forEach((button) => {
 
 globalSearch.addEventListener("input", () => {
   renderNodes();
+  renderRelayMachines();
   renderRules();
 });
 
@@ -386,6 +433,7 @@ document.querySelector("#saveRuleButton").addEventListener("click", async () => 
   const protocol = document.querySelector("#ruleProtocolInput").value;
   const payload = {
     name: document.querySelector("#ruleNameInput").value.trim(),
+    relayNodeId: document.querySelector("#ruleRelayNodeInput").value,
     listen: document.querySelector("#ruleListenInput").value.trim(),
     target: document.querySelector("#ruleTargetInput").value.trim(),
     protocol,
@@ -395,7 +443,7 @@ document.querySelector("#saveRuleButton").addEventListener("click", async () => 
     status: "running",
     enabled: true,
     proxyProtocol: {
-      mode: "off",
+      mode: "send",
       version: "v2",
       trustedCidrs: []
     }

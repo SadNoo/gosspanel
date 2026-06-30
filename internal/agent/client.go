@@ -20,6 +20,7 @@ type Config struct {
 	NodeID   string
 	Name     string
 	Region   string
+	Role     domain.NodeRole
 	Interval time.Duration
 }
 
@@ -33,6 +34,7 @@ func Run(ctx context.Context, args []string, logger *slog.Logger) error {
 		ID:     cfg.NodeID,
 		Name:   cfg.Name,
 		Region: cfg.Region,
+		Role:   cfg.Role,
 	}); err != nil {
 		return err
 	}
@@ -61,9 +63,20 @@ func parseArgs(args []string) (Config, error) {
 	fs.StringVar(&cfg.NodeID, "node-id", hostname, "node id")
 	fs.StringVar(&cfg.Name, "name", hostname, "node display name")
 	fs.StringVar(&cfg.Region, "region", "agent", "node region")
+	fs.Func("role", "machine role: client or relay", func(value string) error {
+		if value == string(domain.NodeRoleRelay) {
+			cfg.Role = domain.NodeRoleRelay
+			return nil
+		}
+		cfg.Role = domain.NodeRoleClient
+		return nil
+	})
 	fs.DurationVar(&cfg.Interval, "interval", 15*time.Second, "heartbeat interval")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
+	}
+	if cfg.Role == "" {
+		cfg.Role = domain.NodeRoleClient
 	}
 	if cfg.NodeID == "" {
 		return cfg, fmt.Errorf("node id is required")
@@ -74,6 +87,7 @@ func parseArgs(args []string) (Config, error) {
 func heartbeat(client *http.Client, cfg Config, logger *slog.Logger) error {
 	req := domain.AgentHeartbeatRequest{
 		ID:       cfg.NodeID,
+		Role:     cfg.Role,
 		Status:   domain.NodeStatusRunning,
 		Load:     "agent",
 		Latency:  "-",
@@ -92,7 +106,7 @@ func heartbeat(client *http.Client, cfg Config, logger *slog.Logger) error {
 }
 
 func getRules(client *http.Client, cfg Config) ([]domain.RelayRule, error) {
-	req, err := http.NewRequest(http.MethodGet, cfg.Server+"/api/agent/rules", nil)
+	req, err := http.NewRequest(http.MethodGet, cfg.Server+"/api/agent/rules?relayNodeId="+cfg.NodeID, nil)
 	if err != nil {
 		return nil, err
 	}

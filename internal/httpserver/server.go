@@ -15,7 +15,6 @@ import (
 	"github.com/SadNoo/gosspanel/internal/auth"
 	"github.com/SadNoo/gosspanel/internal/config"
 	"github.com/SadNoo/gosspanel/internal/domain"
-	"github.com/SadNoo/gosspanel/internal/relay"
 	"github.com/SadNoo/gosspanel/internal/store"
 	"github.com/SadNoo/gosspanel/web"
 )
@@ -24,16 +23,14 @@ type Server struct {
 	cfg    config.Config
 	store  store.Store
 	auth   *auth.Manager
-	relay  *relay.Manager
 	logger *slog.Logger
 }
 
-func New(cfg config.Config, st store.Store, relayMgr *relay.Manager, logger *slog.Logger) *http.Server {
+func New(cfg config.Config, st store.Store, logger *slog.Logger) *http.Server {
 	app := &Server{
 		cfg:    cfg,
 		store:  st,
 		auth:   auth.New(cfg),
-		relay:  relayMgr,
 		logger: logger,
 	}
 
@@ -60,6 +57,7 @@ func (s *Server) routes() http.Handler {
 
 	mux.HandleFunc("GET /api/overview", s.requireAuth(s.overview))
 	mux.HandleFunc("GET /api/nodes", s.requireAuth(s.nodes))
+	mux.HandleFunc("GET /api/relay-machines", s.requireAuth(s.relayMachines))
 	mux.HandleFunc("GET /api/rules", s.requireAuth(s.rules))
 	mux.HandleFunc("POST /api/rules", s.requireAuth(s.createRule))
 	mux.HandleFunc("GET /api/rules/{id}", s.requireAuth(s.rule))
@@ -175,7 +173,12 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
-	nodes, err := s.store.Nodes(r.Context())
+	nodes, err := s.store.NodesByRole(r.Context(), domain.NodeRoleClient)
+	writeResult(w, nodes, err)
+}
+
+func (s *Server) relayMachines(w http.ResponseWriter, r *http.Request) {
+	nodes, err := s.store.NodesByRole(r.Context(), domain.NodeRoleRelay)
 	writeResult(w, nodes, err)
 }
 
@@ -196,8 +199,7 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rule, err := s.store.CreateRule(r.Context(), input)
 	if err == nil {
-		_ = s.relay.Sync(r.Context())
-		_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "规则已创建", Body: rule.Name, Time: time.Now().Format("15:04:05")})
+		_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "规则已创建", Body: "等待中转机器拉取执行: " + rule.Name, Time: time.Now().Format("15:04:05")})
 	}
 	writeResultStatus(w, http.StatusCreated, rule, err)
 }
@@ -209,8 +211,7 @@ func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rule, err := s.store.UpdateRule(r.Context(), r.PathValue("id"), input)
 	if err == nil {
-		_ = s.relay.Sync(r.Context())
-		_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "规则已更新", Body: rule.Name, Time: time.Now().Format("15:04:05")})
+		_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "规则已更新", Body: "等待中转机器拉取执行: " + rule.Name, Time: time.Now().Format("15:04:05")})
 	}
 	writeResult(w, rule, err)
 }
@@ -218,7 +219,7 @@ func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 	err := s.store.DeleteRule(r.Context(), r.PathValue("id"))
 	if err == nil {
-		_ = s.relay.Sync(r.Context())
+		_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "规则已删除", Body: r.PathValue("id"), Time: time.Now().Format("15:04:05")})
 	}
 	writeResult(w, map[string]string{"status": "deleted"}, err)
 }
@@ -248,6 +249,7 @@ func (s *Server) agentRegister(w http.ResponseWriter, r *http.Request) {
 		ID:       req.ID,
 		Name:     req.Name,
 		Region:   req.Region,
+		Role:     normalizeNodeRole(req.Role),
 		Status:   domain.NodeStatusRunning,
 		Load:     "0%",
 		Latency:  "-",
@@ -269,10 +271,12 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if req.LastSeen == "" {
 		req.LastSeen = time.Now().Format("15:04:05")
 	}
+	role := normalizeNodeRole(req.Role)
 	err := s.store.UpsertNode(r.Context(), domain.Node{
 		ID:       req.ID,
 		Name:     req.ID,
-		Region:   "agent",
+		Region:   string(role),
+		Role:     role,
 		Status:   req.Status,
 		Load:     req.Load,
 		Latency:  req.Latency,
@@ -284,7 +288,32 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentRules(w http.ResponseWriter, r *http.Request) {
 	rules, err := s.store.EnabledRules(r.Context())
-	writeResult(w, rules, err)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	relayNodeID := r.URL.Query().Get("relayNodeId")
+	if relayNodeID == "" {
+		relayNodeID = r.Header.Get("X-Goss-Node-ID")
+	}
+	if relayNodeID == "" {
+		writeJSON(w, http.StatusOK, rules)
+		return
+	}
+	filtered := make([]domain.RelayRule, 0, len(rules))
+	for _, rule := range rules {
+		if rule.RelayNodeID == relayNodeID {
+			filtered = append(filtered, rule)
+		}
+	}
+	writeJSON(w, http.StatusOK, filtered)
+}
+
+func normalizeNodeRole(role domain.NodeRole) domain.NodeRole {
+	if role == domain.NodeRoleRelay {
+		return domain.NodeRoleRelay
+	}
+	return domain.NodeRoleClient
 }
 
 func (s *Server) static() http.Handler {
@@ -347,8 +376,8 @@ func decodeRuleInput(w http.ResponseWriter, r *http.Request) (domain.RuleInput, 
 		writeError(w, http.StatusBadRequest, err)
 		return input, false
 	}
-	if input.Name == "" || input.Listen == "" || input.Target == "" {
-		writeError(w, http.StatusBadRequest, errors.New("name, listen and target are required"))
+	if input.Name == "" || input.RelayNodeID == "" || input.Listen == "" || input.Target == "" {
+		writeError(w, http.StatusBadRequest, errors.New("name, relayNodeId, listen and target are required"))
 		return input, false
 	}
 	return input, true

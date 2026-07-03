@@ -98,6 +98,10 @@ const globalSearch = document.querySelector("#globalSearch");
 const ruleStatusFilter = document.querySelector("#ruleStatusFilter");
 const ruleModal = document.querySelector("#ruleModal");
 const settingsMessage = document.querySelector("#settingsMessage");
+const ruleTable = document.querySelector("#ruleTable");
+const proxyProtocolSwitch = document.querySelector("#proxyProtocolSwitch");
+let editingRuleId = "";
+let proxyVersion = "v2";
 
 function setView(viewId) {
   navButtons.forEach((button) => {
@@ -110,6 +114,20 @@ function setView(viewId) {
 
 function statusBadge(status) {
   return `<span class="status ${status}">${statusText[status]}</span>`;
+}
+
+function showToast(message, tone = "") {
+  let toast = document.querySelector("#appToast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "appToast";
+    toast.className = "toast";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.className = `toast open ${tone}`.trim();
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => toast.classList.remove("open"), 2600);
 }
 
 function renderEvents() {
@@ -163,6 +181,16 @@ function normalizeRule(rule) {
     proxy: proxyLabel(rule.proxyProtocol),
     strategy: rule.strategy || "single"
   };
+}
+
+function protocolToRelayProtocol(protocol) {
+  const normalized = protocol.replace(/\s+/g, "").toUpperCase();
+  if (normalized === "TCP") return "direct_tcp";
+  if (normalized === "TCP+TLS") return "tls";
+  if (normalized === "WS") return "ws";
+  if (normalized === "WS+TLS") return "ws_tls";
+  if (normalized === "SOCKS5") return "socks5";
+  return "tcp_tunnel";
 }
 
 async function loadData() {
@@ -284,7 +312,7 @@ function renderRules() {
   document.querySelector("#ruleTable").innerHTML = filteredRules()
     .map(
       (rule) => `
-        <tr>
+        <tr data-rule-id="${rule.id}">
           <td class="rule-name">
             <strong>${rule.name}</strong>
             <span>${rule.detail}</span>
@@ -298,8 +326,9 @@ function renderRules() {
           <td>${rule.traffic}</td>
           <td>
             <div class="action-row">
-              <button class="mini-button" type="button">${rule.status === "paused" ? "启动" : "暂停"}</button>
-              <button class="mini-button" type="button">编辑</button>
+              <button class="mini-button" data-rule-action="toggle" type="button">${rule.status === "paused" ? "启动" : "暂停"}</button>
+              <button class="mini-button" data-rule-action="edit" type="button">编辑</button>
+              <button class="mini-button danger" data-rule-action="delete" type="button">删除</button>
             </div>
           </td>
         </tr>
@@ -410,7 +439,48 @@ function setSettingsMessage(text, tone = "") {
   settingsMessage.className = `settings-message ${tone}`.trim();
 }
 
-function openModal() {
+function resetRuleForm() {
+  editingRuleId = "";
+  document.querySelector("#ruleModalTitle").textContent = "新建中转规则";
+  document.querySelector("#ruleNameInput").value = "测试 TCP 转发";
+  document.querySelector("#ruleProtocolInput").value = "TCP";
+  document.querySelector("#ruleListenInput").value = ":19090";
+  document.querySelector("#ruleTargetInput").value = "localhost:8080";
+  proxyVersion = "v2";
+  if (proxyProtocolSwitch) proxyProtocolSwitch.checked = true;
+  syncProxyButtons();
+  renderRelayOptions();
+  renderClientOptions();
+}
+
+function syncProxyButtons() {
+  document.querySelectorAll("[data-proxy-version]").forEach((button) => {
+    const active = proxyVersion === button.dataset.proxyVersion;
+    button.classList.toggle("active", active);
+  });
+  if (proxyProtocolSwitch && proxyVersion === "off") {
+    proxyProtocolSwitch.checked = false;
+  }
+}
+
+function openModal(rule = null) {
+  if (rule) {
+    editingRuleId = rule.id;
+    document.querySelector("#ruleModalTitle").textContent = "编辑中转规则";
+    document.querySelector("#ruleNameInput").value = rule.name || "";
+    document.querySelector("#ruleProtocolInput").value = rule.protocol || "TCP";
+    document.querySelector("#ruleListenInput").value = rule.listen || "";
+    document.querySelector("#ruleTargetInput").value = rule.target || "";
+    renderRelayOptions();
+    renderClientOptions();
+    document.querySelector("#ruleRelayNodeInput").value = rule.relayNodeId || "";
+    document.querySelector("#ruleClientNodeInput").value = rule.clientNodeId || "";
+    proxyVersion = rule.proxyProtocol?.mode === "off" ? "off" : rule.proxyProtocol?.version || "v2";
+    if (proxyProtocolSwitch) proxyProtocolSwitch.checked = rule.proxyProtocol?.mode !== "off";
+    syncProxyButtons();
+  } else {
+    resetRuleForm();
+  }
   ruleModal.classList.add("open");
   ruleModal.setAttribute("aria-hidden", "false");
 }
@@ -420,12 +490,116 @@ function closeModal() {
   ruleModal.setAttribute("aria-hidden", "true");
 }
 
+async function refreshData(message = "数据已刷新") {
+  await loadData();
+  renderAll();
+  showToast(message, "success");
+}
+
+function rulePayloadFromForm(base = {}) {
+  const protocol = document.querySelector("#ruleProtocolInput").value;
+  const relayProtocol = protocolToRelayProtocol(protocol);
+  const proxyEnabled = proxyProtocolSwitch ? proxyProtocolSwitch.checked && proxyVersion !== "off" : false;
+  return {
+    ...base,
+    name: document.querySelector("#ruleNameInput").value.trim(),
+    relayNodeId: document.querySelector("#ruleRelayNodeInput").value,
+    clientNodeId: document.querySelector("#ruleClientNodeInput").value,
+    listen: document.querySelector("#ruleListenInput").value.trim(),
+    target: document.querySelector("#ruleTargetInput").value.trim(),
+    protocol,
+    inbound: relayProtocol,
+    outbound: relayProtocol,
+    strategy: base.strategy || "single",
+    status: base.status || "running",
+    enabled: base.enabled ?? true,
+    proxyProtocol: {
+      mode: proxyEnabled ? "send" : "off",
+      version: proxyVersion === "v1" ? "v1" : "v2",
+      trustedCidrs: base.proxyProtocol?.trustedCidrs || []
+    }
+  };
+}
+
+function rulePayloadFromRule(rule, overrides = {}) {
+  return {
+    name: rule.name,
+    relayNodeId: rule.relayNodeId,
+    clientNodeId: rule.clientNodeId,
+    listen: rule.listen,
+    target: rule.target,
+    protocol: rule.protocol,
+    inbound: rule.inbound,
+    outbound: rule.outbound,
+    strategy: rule.strategy,
+    status: rule.status,
+    enabled: rule.enabled,
+    proxyProtocol: rule.proxyProtocol || { mode: "off", version: "v2", trustedCidrs: [] },
+    ...overrides
+  };
+}
+
+async function saveRule() {
+  const current = editingRuleId ? rules.find((rule) => rule.id === editingRuleId) : null;
+  const payload = rulePayloadFromForm(current || {});
+  const path = editingRuleId ? `/api/rules/${editingRuleId}` : "/api/rules";
+  const method = editingRuleId ? "PUT" : "POST";
+  await apiFetch(path, {
+    method,
+    body: JSON.stringify(payload)
+  });
+  closeModal();
+  await refreshData(editingRuleId ? "规则已保存" : "规则已创建");
+}
+
+async function toggleRule(rule) {
+  const paused = rule.status === "paused";
+  await apiFetch(`/api/rules/${rule.id}`, {
+    method: "PUT",
+    body: JSON.stringify(
+      rulePayloadFromRule(rule, {
+        status: paused ? "running" : "paused",
+        enabled: paused
+      })
+    )
+  });
+  await refreshData(paused ? "规则已启动" : "规则已暂停");
+}
+
+async function deleteRule(rule) {
+  if (!window.confirm(`删除规则「${rule.name}」？`)) return;
+  await apiFetch(`/api/rules/${rule.id}`, { method: "DELETE" });
+  await refreshData("规则已删除");
+}
+
+function exportOnlineIPs() {
+  const rows = [["真实 IP", "入口", "规则", "连接", "最近活跃"], ...ips.map((item) => [item.ip, item.entry, item.rule, item.conns, item.active])];
+  const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `goss-online-ips-${Date.now()}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast("在线 IP 已导出", "success");
+}
+
 navButtons.forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
 });
 
 document.querySelectorAll("[data-view-jump]").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.viewJump));
+});
+
+document.querySelectorAll(".segmented button").forEach((button) => {
+  if (button.dataset.proxyVersion) return;
+  button.addEventListener("click", () => {
+    const group = button.closest(".segmented");
+    group.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
+    showToast(`已切换为${button.textContent.trim()}视图`);
+  });
 });
 
 globalSearch.addEventListener("input", () => {
@@ -438,38 +612,52 @@ if (ruleStatusFilter) {
   ruleStatusFilter.addEventListener("change", renderRules);
 }
 
-document.querySelector("#openRuleModal").addEventListener("click", openModal);
-document.querySelector("#openRuleModal2").addEventListener("click", openModal);
+document.querySelector("#refreshDataButton").addEventListener("click", () => {
+  refreshData().catch((error) => showToast(error.message, "error"));
+});
+document.querySelector("#openRuleModal").addEventListener("click", () => openModal());
+document.querySelector("#openRuleModal2").addEventListener("click", () => openModal());
 document.querySelector("#closeRuleModal").addEventListener("click", closeModal);
 document.querySelector("#cancelRuleModal").addEventListener("click", closeModal);
-document.querySelector("#saveRuleButton").addEventListener("click", async () => {
-  const protocol = document.querySelector("#ruleProtocolInput").value;
-  const payload = {
-    name: document.querySelector("#ruleNameInput").value.trim(),
-    relayNodeId: document.querySelector("#ruleRelayNodeInput").value,
-    clientNodeId: document.querySelector("#ruleClientNodeInput").value,
-    listen: document.querySelector("#ruleListenInput").value.trim(),
-    target: document.querySelector("#ruleTargetInput").value.trim(),
-    protocol,
-    inbound: protocol === "TCP" ? "direct_tcp" : "tcp_tunnel",
-    outbound: protocol === "TCP" ? "direct_tcp" : "tcp_tunnel",
-    strategy: "single",
-    status: "running",
-    enabled: true,
-    proxyProtocol: {
-      mode: "send",
-      version: "v2",
-      trustedCidrs: []
-    }
-  };
-  await apiFetch("/api/rules", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-  closeModal();
-  await loadData();
-  renderAll();
+document.querySelector("#saveRuleButton").addEventListener("click", () => {
+  saveRule().catch((error) => showToast(error.message, "error"));
 });
+
+document.querySelectorAll("[data-proxy-version]").forEach((button) => {
+  button.addEventListener("click", () => {
+    proxyVersion = button.dataset.proxyVersion;
+    if (proxyVersion !== "off" && proxyProtocolSwitch) proxyProtocolSwitch.checked = true;
+    syncProxyButtons();
+  });
+});
+
+if (proxyProtocolSwitch) {
+  proxyProtocolSwitch.addEventListener("change", () => {
+    if (!proxyProtocolSwitch.checked) proxyVersion = "off";
+    if (proxyProtocolSwitch.checked && proxyVersion === "off") proxyVersion = "v2";
+    syncProxyButtons();
+  });
+}
+
+if (ruleTable) {
+  ruleTable.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-rule-action]");
+    if (!button) return;
+    const row = button.closest("[data-rule-id]");
+    const rule = rules.find((item) => item.id === row?.dataset.ruleId);
+    if (!rule) return;
+    const action = button.dataset.ruleAction;
+    if (action === "edit") openModal(rule);
+    if (action === "toggle") toggleRule(rule).catch((error) => showToast(error.message, "error"));
+    if (action === "delete") deleteRule(rule).catch((error) => showToast(error.message, "error"));
+  });
+}
+
+document.querySelector("#exportIpsButton").addEventListener("click", exportOnlineIPs);
+document.querySelector("#viewEventsButton").addEventListener("click", () => showToast("事件列表已按最新时间展示"));
+document.querySelector("#addClientButton").addEventListener("click", () => showToast("客户端机器启动 agent 后会自动接入"));
+document.querySelector("#addRelayButton").addEventListener("click", () => showToast("中转机器启动 relay agent 后会自动接入"));
+document.querySelector("#addCertButton").addEventListener("click", () => showToast("证书申请和部署功能将在 TLS/WSS 阶段接入"));
 
 document.querySelector("#saveAccountSettings").addEventListener("click", async () => {
   setSettingsMessage("正在保存...");

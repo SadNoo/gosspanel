@@ -70,7 +70,7 @@
               <span>⌕</span>
               <input id="globalSearch" type="search" placeholder="搜索节点、规则、IP">
             </label>
-            <button class="icon-button" type="button" title="刷新数据">↻</button>
+            <button class="icon-button" id="refreshDataButton" type="button" title="刷新数据">↻</button>
             <button class="primary-button" id="openRuleModal" type="button">
               <span>＋</span>
               新建规则
@@ -150,7 +150,7 @@
             <section class="panel event-panel">
               <div class="panel-head compact">
                 <h2>事件</h2>
-                <button class="ghost-button" type="button">查看全部</button>
+                <button class="ghost-button" id="viewEventsButton" type="button">查看全部</button>
               </div>
               <div class="event-list" id="eventList"></div>
             </section>
@@ -189,7 +189,7 @@
               <h2>客户端机器管理</h2>
               <p>客户端机器接入、健康检查和 Agent 状态</p>
             </div>
-            <button class="primary-button" type="button">
+            <button class="primary-button" id="addClientButton" type="button">
               <span>＋</span>
               添加节点
             </button>
@@ -203,7 +203,7 @@
               <h2>中转机器管理</h2>
               <p>真正执行中转规则的机器后端，由面板统一下发规则</p>
             </div>
-            <button class="primary-button" type="button">
+            <button class="primary-button" id="addRelayButton" type="button">
               <span>＋</span>
               接入中转机器
             </button>
@@ -262,7 +262,7 @@
                 <option>最近 1 小时</option>
                 <option>今天</option>
               </select>
-              <button class="ghost-button" type="button">导出 CSV</button>
+              <button class="ghost-button" id="exportIpsButton" type="button">导出 CSV</button>
             </div>
           </div>
           <div class="ip-layout">
@@ -300,7 +300,7 @@
               <h2>证书管理</h2>
               <p>自动申请、续期、部署到 TLS / WSS 中转规则</p>
             </div>
-            <button class="primary-button" type="button">
+            <button class="primary-button" id="addCertButton" type="button">
               <span>＋</span>
               添加证书
             </button>
@@ -349,7 +349,7 @@
       <form class="modal" aria-label="新建中转规则">
         <div class="modal-head">
           <div>
-            <h2>新建中转规则</h2>
+            <h2 id="ruleModalTitle">新建中转规则</h2>
             <p>定义入口监听、出口目标和真实 IP 传递方式</p>
           </div>
           <button class="icon-button" id="closeRuleModal" type="button" title="关闭">×</button>
@@ -396,14 +396,14 @@
               <span>仅在可信入口节点启用，避免伪造来源</span>
             </div>
             <label class="switch">
-              <input type="checkbox" checked>
+              <input id="proxyProtocolSwitch" type="checkbox" checked>
               <span></span>
             </label>
           </div>
           <div class="segmented wide">
-            <button class="active" type="button">v2</button>
-            <button type="button">v1</button>
-            <button type="button">关闭</button>
+            <button class="active" data-proxy-version="v2" type="button">v2</button>
+            <button data-proxy-version="v1" type="button">v1</button>
+            <button data-proxy-version="off" type="button">关闭</button>
           </div>
         </fieldset>
 

@@ -78,12 +78,7 @@ func (m *Manager) startRule(rule domain.RelayRule) (*listenerState, error) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	state := &listenerState{rule: rule, cancel: cancel}
 	if isUDP(rule) {
-		addr, err := net.ResolveUDPAddr("udp", rule.Listen)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-		conn, err := net.ListenUDP("udp", addr)
+		conn, err := listenUDP(rule.Listen)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -100,6 +95,16 @@ func (m *Manager) startRule(rule domain.RelayRule) (*listenerState, error) {
 	}
 	state.tcpListener = listener
 	go m.serveTCP(runCtx, state)
+
+	if isTCP(rule) {
+		conn, err := listenUDP(rule.Listen)
+		if err != nil {
+			m.logger.Warn("tcp relay udp companion skipped", "rule", rule.Name, "listen", rule.Listen, "error", err)
+		} else {
+			state.udpConn = conn
+			go m.serveUDP(runCtx, state)
+		}
+	}
 	return state, nil
 }
 
@@ -259,6 +264,18 @@ func runnable(rule domain.RelayRule) bool {
 
 func isUDP(rule domain.RelayRule) bool {
 	return rule.Inbound == domain.RelayProtocolDirectUDP && rule.Outbound == domain.RelayProtocolDirectUDP
+}
+
+func isTCP(rule domain.RelayRule) bool {
+	return rule.Inbound == domain.RelayProtocolDirectTCP && rule.Outbound == domain.RelayProtocolDirectTCP
+}
+
+func listenUDP(listen string) (*net.UDPConn, error) {
+	addr, err := net.ResolveUDPAddr("udp", listen)
+	if err != nil {
+		return nil, err
+	}
+	return net.ListenUDP("udp", addr)
 }
 
 func shouldRestart(next domain.RelayRule, current domain.RelayRule) bool {

@@ -821,6 +821,29 @@ input[type="text"] {
   box-shadow: var(--shadow);
 }
 
+.command-modal {
+  width: min(920px, 100%);
+}
+
+.command-block {
+  max-height: min(56vh, 520px);
+  margin: 0;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #dbeafe;
+  background: #0f172a;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.command-block code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .modal-head {
   display: flex;
   align-items: flex-start;

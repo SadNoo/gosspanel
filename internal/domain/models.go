@@ -43,6 +43,7 @@ type RelayProtocol string
 
 const (
 	RelayProtocolDirectTCP RelayProtocol = "direct_tcp"
+	RelayProtocolDirectUDP RelayProtocol = "direct_udp"
 	RelayProtocolTLS       RelayProtocol = "tls"
 	RelayProtocolWS        RelayProtocol = "ws"
 	RelayProtocolWSS       RelayProtocol = "ws_tls"
@@ -180,4 +181,10 @@ type AgentOnlineIPReport struct {
 	NodeID string     `json:"nodeId"`
 	Role   NodeRole   `json:"role"`
 	Items  []OnlineIP `json:"items"`
+}
+
+type AgentBootstrapCommands struct {
+	PanelURL string `json:"panelUrl"`
+	Relay    string `json:"relay"`
+	Client   string `json:"client"`
 }

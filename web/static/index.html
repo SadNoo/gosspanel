@@ -345,6 +345,23 @@
       </main>
     </div>
 
+    <div class="modal-backdrop" id="commandModal" aria-hidden="true">
+      <div class="modal command-modal" role="dialog" aria-label="接入命令">
+        <div class="modal-head">
+          <div>
+            <h2 id="commandModalTitle">接入命令</h2>
+            <p>复制到目标机器执行，机器需要已安装 goss 二进制</p>
+          </div>
+          <button class="icon-button" id="closeCommandModal" type="button" title="关闭">×</button>
+        </div>
+        <pre class="command-block"><code id="commandText"></code></pre>
+        <div class="modal-actions">
+          <button class="ghost-button" id="copyCommandButton" type="button">复制命令</button>
+          <button class="primary-button" id="closeCommandModal2" type="button">完成</button>
+        </div>
+      </div>
+    </div>
+
     <div class="modal-backdrop" id="ruleModal" aria-hidden="true">
       <form class="modal" aria-label="新建中转规则">
         <div class="modal-head">
@@ -364,6 +381,7 @@
             协议
             <select id="ruleProtocolInput">
               <option>TCP</option>
+              <option>UDP</option>
               <option>TCP + TLS</option>
               <option>WS + TLS</option>
               <option>WS</option>

@@ -100,6 +100,9 @@ const ruleModal = document.querySelector("#ruleModal");
 const settingsMessage = document.querySelector("#settingsMessage");
 const ruleTable = document.querySelector("#ruleTable");
 const proxyProtocolSwitch = document.querySelector("#proxyProtocolSwitch");
+const commandModal = document.querySelector("#commandModal");
+const commandText = document.querySelector("#commandText");
+let bootstrapCommands = { relay: "", client: "" };
 let editingRuleId = "";
 let proxyVersion = "v2";
 
@@ -186,6 +189,7 @@ function normalizeRule(rule) {
 function protocolToRelayProtocol(protocol) {
   const normalized = protocol.replace(/\s+/g, "").toUpperCase();
   if (normalized === "TCP") return "direct_tcp";
+  if (normalized === "UDP") return "direct_udp";
   if (normalized === "TCP+TLS") return "tls";
   if (normalized === "WS") return "ws";
   if (normalized === "WS+TLS") return "ws_tls";
@@ -194,12 +198,13 @@ function protocolToRelayProtocol(protocol) {
 }
 
 async function loadData() {
-  const [overview, relayMachineItems, onlineIps, certificates, account] = await Promise.all([
+  const [overview, relayMachineItems, onlineIps, certificates, account, bootstrap] = await Promise.all([
     apiFetch("/api/overview"),
     apiFetch("/api/relay-machines"),
     apiFetch("/api/online-ips"),
     apiFetch("/api/certificates"),
-    apiFetch("/api/settings/account")
+    apiFetch("/api/settings/account"),
+    apiFetch("/api/agent/bootstrap")
   ]);
   if (!overview) return;
   nodes = overview.nodes || [];
@@ -221,6 +226,7 @@ async function loadData() {
     used: cert.usedBy
   }));
   accountSettings = account || accountSettings;
+  bootstrapCommands = bootstrap || bootstrapCommands;
 }
 
 function filteredRules() {
@@ -490,6 +496,41 @@ function closeModal() {
   ruleModal.setAttribute("aria-hidden", "true");
 }
 
+function openCommandModal(role) {
+  const isRelay = role === "relay";
+  document.querySelector("#commandModalTitle").textContent = isRelay ? "中转机器接入命令" : "客户端机器接入命令";
+  commandText.textContent = isRelay ? bootstrapCommands.relay || "" : bootstrapCommands.client || "";
+  commandModal.classList.add("open");
+  commandModal.setAttribute("aria-hidden", "false");
+}
+
+function closeCommandModal() {
+  commandModal.classList.remove("open");
+  commandModal.setAttribute("aria-hidden", "true");
+}
+
+async function copyCommand() {
+  const text = commandText.textContent.trim();
+  if (!text) {
+    showToast("命令还没有加载完成", "error");
+    return;
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+  }
+  showToast("接入命令已复制", "success");
+}
+
 async function refreshData(message = "数据已刷新") {
   await loadData();
   renderAll();
@@ -499,7 +540,7 @@ async function refreshData(message = "数据已刷新") {
 function rulePayloadFromForm(base = {}) {
   const protocol = document.querySelector("#ruleProtocolInput").value;
   const relayProtocol = protocolToRelayProtocol(protocol);
-  const proxyEnabled = proxyProtocolSwitch ? proxyProtocolSwitch.checked && proxyVersion !== "off" : false;
+  const proxyEnabled = relayProtocol !== "direct_udp" && proxyProtocolSwitch ? proxyProtocolSwitch.checked && proxyVersion !== "off" : false;
   return {
     ...base,
     name: document.querySelector("#ruleNameInput").value.trim(),
@@ -619,6 +660,11 @@ document.querySelector("#openRuleModal").addEventListener("click", () => openMod
 document.querySelector("#openRuleModal2").addEventListener("click", () => openModal());
 document.querySelector("#closeRuleModal").addEventListener("click", closeModal);
 document.querySelector("#cancelRuleModal").addEventListener("click", closeModal);
+document.querySelector("#closeCommandModal").addEventListener("click", closeCommandModal);
+document.querySelector("#closeCommandModal2").addEventListener("click", closeCommandModal);
+document.querySelector("#copyCommandButton").addEventListener("click", () => {
+  copyCommand().catch((error) => showToast(error.message, "error"));
+});
 document.querySelector("#saveRuleButton").addEventListener("click", () => {
   saveRule().catch((error) => showToast(error.message, "error"));
 });
@@ -655,8 +701,8 @@ if (ruleTable) {
 
 document.querySelector("#exportIpsButton").addEventListener("click", exportOnlineIPs);
 document.querySelector("#viewEventsButton").addEventListener("click", () => showToast("事件列表已按最新时间展示"));
-document.querySelector("#addClientButton").addEventListener("click", () => showToast("客户端机器启动 agent 后会自动接入"));
-document.querySelector("#addRelayButton").addEventListener("click", () => showToast("中转机器启动 relay agent 后会自动接入"));
+document.querySelector("#addClientButton").addEventListener("click", () => openCommandModal("client"));
+document.querySelector("#addRelayButton").addEventListener("click", () => openCommandModal("relay"));
 document.querySelector("#addCertButton").addEventListener("click", () => showToast("证书申请和部署功能将在 TLS/WSS 阶段接入"));
 
 document.querySelector("#saveAccountSettings").addEventListener("click", async () => {
@@ -684,9 +730,15 @@ document.querySelector("#saveAccountSettings").addEventListener("click", async (
 ruleModal.addEventListener("click", (event) => {
   if (event.target === ruleModal) closeModal();
 });
+commandModal.addEventListener("click", (event) => {
+  if (event.target === commandModal) closeCommandModal();
+});
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeModal();
+  if (event.key === "Escape") {
+    closeModal();
+    closeCommandModal();
+  }
 });
 
 loadData()

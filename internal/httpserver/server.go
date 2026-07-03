@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -50,6 +51,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.me))
 	mux.HandleFunc("GET /api/settings/account", s.requireAuth(s.accountSettings))
 	mux.HandleFunc("PUT /api/settings/account", s.requireAuth(s.updateAccountSettings))
+	mux.HandleFunc("GET /api/agent/bootstrap", s.requireAuth(s.agentBootstrap))
 
 	mux.HandleFunc("POST /api/agent/register", s.requireAgent(s.agentRegister))
 	mux.HandleFunc("POST /api/agent/heartbeat", s.requireAgent(s.agentHeartbeat))
@@ -166,6 +168,15 @@ func (s *Server) updateAccountSettings(w http.ResponseWriter, r *http.Request) {
 	s.auth.SetSession(w, next.Username)
 	_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "账号设置已更新", Body: next.Username, Time: time.Now().Format("15:04:05")})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "username": next.Username})
+}
+
+func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
+	panelURL := externalPanelURL(r)
+	writeJSON(w, http.StatusOK, domain.AgentBootstrapCommands{
+		PanelURL: panelURL,
+		Relay:    agentInstallCommand(panelURL, s.cfg.AgentToken, domain.NodeRoleRelay),
+		Client:   agentInstallCommand(panelURL, s.cfg.AgentToken, domain.NodeRoleClient),
+	})
 }
 
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
@@ -443,6 +454,63 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func constantStringEqual(a string, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+func externalPanelURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
+		scheme = strings.Split(forwarded, ",")[0]
+	}
+	host := r.Host
+	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
+		host = strings.Split(forwarded, ",")[0]
+	}
+	return strings.TrimSpace(scheme) + "://" + strings.TrimSpace(host)
+}
+
+func agentInstallCommand(panelURL string, token string, role domain.NodeRole) string {
+	panelURL = strings.ReplaceAll(panelURL, `"`, `\"`)
+	serviceName := "goss-client-agent"
+	nodeSuffix := "client"
+	displayName := "Goss Client"
+	region := "Client"
+	extra := ""
+	if role == domain.NodeRoleRelay {
+		serviceName = "goss-relay-agent"
+		nodeSuffix = "relay"
+		displayName = "Goss Relay"
+		region = "Relay"
+	} else {
+		extra = " -report-ip \"$(hostname -I 2>/dev/null | awk '{print $1}')\""
+	}
+	return fmt.Sprintf(`set -e
+command -v goss >/dev/null || { echo "请先将 goss 二进制安装到 /usr/local/bin/goss"; exit 1; }
+mkdir -p /etc/goss
+cat > /etc/goss/agent.env <<'EOF'
+GOSS_AGENT_TOKEN=%s
+EOF
+chmod 600 /etc/goss/agent.env
+cat > /etc/systemd/system/%s.service <<'EOF'
+[Unit]
+Description=%s
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/goss/agent.env
+ExecStart=/bin/sh -c 'exec /usr/local/bin/goss agent -server "%s" -token "$GOSS_AGENT_TOKEN" -role %s -node-id "$(hostname)-%s" -name "%s $(hostname)" -region "%s" -interval 5s%s'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now %s.service
+systemctl status %s.service --no-pager -l`, token, serviceName, displayName, panelURL, role, nodeSuffix, displayName, region, extra, serviceName, serviceName)
 }
 
 const loginHTML = `<!doctype html>

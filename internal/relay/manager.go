@@ -26,9 +26,10 @@ type Manager struct {
 }
 
 type listenerState struct {
-	rule     domain.RelayRule
-	listener net.Listener
-	cancel   context.CancelFunc
+	rule        domain.RelayRule
+	tcpListener net.Listener
+	udpConn     *net.UDPConn
+	cancel      context.CancelFunc
 }
 
 func NewManager(logger *slog.Logger, recorder OnlineIPRecorder) *Manager {
@@ -52,9 +53,8 @@ func (m *Manager) SyncRules(rules []domain.RelayRule) error {
 
 	for id, state := range m.running {
 		rule, ok := want[id]
-		if !ok || rule.Listen != state.rule.Listen || rule.Target != state.rule.Target || !reflect.DeepEqual(rule.ProxyProtocol, state.rule.ProxyProtocol) {
-			state.cancel()
-			_ = state.listener.Close()
+		if !ok || shouldRestart(rule, state.rule) {
+			state.close()
 			delete(m.running, id)
 		}
 	}
@@ -63,33 +63,68 @@ func (m *Manager) SyncRules(rules []domain.RelayRule) error {
 		if _, ok := m.running[id]; ok {
 			continue
 		}
-		listener, err := net.Listen("tcp", rule.Listen)
+		state, err := m.startRule(rule)
 		if err != nil {
-			m.logger.Warn("relay listen skipped", "rule", rule.Name, "listen", rule.Listen, "error", err)
+			m.logger.Warn("relay listen skipped", "rule", rule.Name, "listen", rule.Listen, "protocol", rule.Inbound, "error", err)
 			continue
 		}
-		runCtx, cancel := context.WithCancel(context.Background())
-		state := &listenerState{rule: rule, listener: listener, cancel: cancel}
 		m.running[id] = state
-		go m.serve(runCtx, state)
-		m.logger.Info("relay listening", "rule", rule.Name, "listen", rule.Listen, "target", rule.Target)
+		m.logger.Info("relay listening", "rule", rule.Name, "listen", rule.Listen, "target", rule.Target, "protocol", rule.Inbound)
 	}
 	return nil
+}
+
+func (m *Manager) startRule(rule domain.RelayRule) (*listenerState, error) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	state := &listenerState{rule: rule, cancel: cancel}
+	if isUDP(rule) {
+		addr, err := net.ResolveUDPAddr("udp", rule.Listen)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		conn, err := net.ListenUDP("udp", addr)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		state.udpConn = conn
+		go m.serveUDP(runCtx, state)
+		return state, nil
+	}
+
+	listener, err := net.Listen("tcp", rule.Listen)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	state.tcpListener = listener
+	go m.serveTCP(runCtx, state)
+	return state, nil
 }
 
 func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, state := range m.running {
-		state.cancel()
-		_ = state.listener.Close()
+		state.close()
 		delete(m.running, id)
 	}
 }
 
-func (m *Manager) serve(ctx context.Context, state *listenerState) {
+func (s *listenerState) close() {
+	s.cancel()
+	if s.tcpListener != nil {
+		_ = s.tcpListener.Close()
+	}
+	if s.udpConn != nil {
+		_ = s.udpConn.Close()
+	}
+}
+
+func (m *Manager) serveTCP(ctx context.Context, state *listenerState) {
 	for {
-		conn, err := state.listener.Accept()
+		conn, err := state.tcpListener.Accept()
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -100,6 +135,58 @@ func (m *Manager) serve(ctx context.Context, state *listenerState) {
 			}
 		}
 		go m.handleConn(ctx, state.rule, conn)
+	}
+}
+
+func (m *Manager) serveUDP(ctx context.Context, state *listenerState) {
+	buffer := make([]byte, 65535)
+	for {
+		n, clientAddr, err := state.udpConn.ReadFromUDP(buffer)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				m.logger.Warn("udp relay read failed", "rule", state.rule.Name, "error", err)
+				continue
+			}
+		}
+		payload := make([]byte, n)
+		copy(payload, buffer[:n])
+		go m.handleUDP(ctx, state.rule, state.udpConn, clientAddr, payload)
+	}
+}
+
+func (m *Manager) handleUDP(ctx context.Context, rule domain.RelayRule, inbound *net.UDPConn, clientAddr *net.UDPAddr, payload []byte) {
+	targetAddr, err := net.ResolveUDPAddr("udp", rule.Target)
+	if err != nil {
+		m.logger.Warn("udp relay target resolve failed", "rule", rule.Name, "target", rule.Target, "error", err)
+		return
+	}
+	outbound, err := net.DialUDP("udp", nil, targetAddr)
+	if err != nil {
+		m.logger.Warn("udp relay dial failed", "rule", rule.Name, "target", rule.Target, "error", err)
+		return
+	}
+	defer outbound.Close()
+
+	if _, err := outbound.Write(payload); err != nil {
+		m.logger.Warn("udp relay write failed", "rule", rule.Name, "target", rule.Target, "error", err)
+		return
+	}
+	m.recordOnlineAddr(ctx, rule, clientAddr)
+
+	response := make([]byte, 65535)
+	_ = outbound.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, _, err := outbound.ReadFromUDP(response)
+	if err != nil {
+		if !errors.Is(err, net.ErrClosed) {
+			m.logger.Debug("udp relay response skipped", "rule", rule.Name, "error", err)
+		}
+		return
+	}
+	if _, err := inbound.WriteToUDP(response[:n], clientAddr); err != nil {
+		m.logger.Warn("udp relay response write failed", "rule", rule.Name, "client", clientAddr.String(), "error", err)
 	}
 }
 
@@ -133,7 +220,7 @@ func (m *Manager) handleConn(ctx context.Context, rule domain.RelayRule, inbound
 	}
 
 	if tcpAddr, ok := sourceAddr.(*net.TCPAddr); ok {
-		m.recordOnlineIP(ctx, rule, tcpAddr)
+		m.recordOnlineAddr(ctx, rule, tcpAddr)
 	}
 
 	errCh := make(chan error, 2)
@@ -142,28 +229,44 @@ func (m *Manager) handleConn(ctx context.Context, rule domain.RelayRule, inbound
 	<-errCh
 }
 
-func (m *Manager) recordOnlineIP(ctx context.Context, rule domain.RelayRule, addr *net.TCPAddr) {
+func (m *Manager) recordOnlineAddr(ctx context.Context, rule domain.RelayRule, addr net.Addr) {
 	if m.recorder == nil {
 		return
 	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		host = addr.String()
+	}
 	if err := m.recorder.RecordOnlineIP(ctx, domain.OnlineIP{
-		IP:          addr.IP.String(),
+		IP:          host,
 		EntryNode:   rule.Listen,
 		RuleName:    rule.Name,
 		Connections: 1,
 		LastActive:  time.Now().Format("15:04:05"),
 	}); err != nil {
-		m.logger.Warn("online ip report failed", "rule", rule.Name, "ip", addr.IP.String(), "error", err)
+		m.logger.Warn("online ip report failed", "rule", rule.Name, "ip", host, "error", err)
 	}
 }
 
 func runnable(rule domain.RelayRule) bool {
 	return rule.Enabled &&
 		rule.Status == domain.RuleStatusRunning &&
-		rule.Inbound == domain.RelayProtocolDirectTCP &&
-		rule.Outbound == domain.RelayProtocolDirectTCP &&
+		((rule.Inbound == domain.RelayProtocolDirectTCP && rule.Outbound == domain.RelayProtocolDirectTCP) ||
+			(rule.Inbound == domain.RelayProtocolDirectUDP && rule.Outbound == domain.RelayProtocolDirectUDP)) &&
 		rule.Listen != "" &&
 		rule.Target != ""
+}
+
+func isUDP(rule domain.RelayRule) bool {
+	return rule.Inbound == domain.RelayProtocolDirectUDP && rule.Outbound == domain.RelayProtocolDirectUDP
+}
+
+func shouldRestart(next domain.RelayRule, current domain.RelayRule) bool {
+	return next.Listen != current.Listen ||
+		next.Target != current.Target ||
+		next.Inbound != current.Inbound ||
+		next.Outbound != current.Outbound ||
+		!reflect.DeepEqual(next.ProxyProtocol, current.ProxyProtocol)
 }
 
 func shouldReceiveProxy(mode domain.ProxyProtocolMode) bool {

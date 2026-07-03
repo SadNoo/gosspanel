@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/SadNoo/gosspanel/internal/domain"
@@ -61,6 +63,7 @@ func (s *SQLite) migrate(ctx context.Context) error {
 			client_node_id TEXT NOT NULL DEFAULT '',
 			listen TEXT NOT NULL,
 			target TEXT NOT NULL,
+			tunnel_endpoint TEXT NOT NULL DEFAULT '',
 			protocol TEXT NOT NULL,
 			inbound TEXT NOT NULL,
 			outbound TEXT NOT NULL,
@@ -116,6 +119,9 @@ func (s *SQLite) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "rules", "client_node_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "rules", "tunnel_endpoint", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	return nil
@@ -244,11 +250,29 @@ func (s *SQLite) seed(ctx context.Context, adminUser string, adminPassword strin
 			}
 		}
 	}
+	return s.cleanupDemoData(ctx)
+}
+
+func (s *SQLite) cleanupDemoData(ctx context.Context) error {
+	stmts := []string{
+		`DELETE FROM rules WHERE relay_node_id = 'relay-demo' AND name IN ('HK 游戏端口段', '中转规则示例')`,
+		`DELETE FROM nodes WHERE id IN ('client-demo', 'relay-demo')`,
+		`DELETE FROM certificates WHERE id IN ('cert-relay-example', 'cert-edge-wildcard')`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (s *SQLite) Overview(ctx context.Context) (domain.Overview, error) {
 	nodes, err := s.NodesByRole(ctx, domain.NodeRoleClient)
+	if err != nil {
+		return domain.Overview{}, err
+	}
+	allNodes, err := s.Nodes(ctx)
 	if err != nil {
 		return domain.Overview{}, err
 	}
@@ -260,21 +284,27 @@ func (s *SQLite) Overview(ctx context.Context) (domain.Overview, error) {
 	if err != nil {
 		return domain.Overview{}, err
 	}
+	onlineIPs, err := s.OnlineIPs(ctx)
+	if err != nil {
+		return domain.Overview{}, err
+	}
 	active := 0
+	dailyBytes := int64(0)
 	for _, rule := range rules {
 		active += rule.Connections
+		dailyBytes += parseBytes(rule.Traffic)
 	}
 	online := 0
-	for _, node := range nodes {
+	for _, node := range allNodes {
 		if node.Status == domain.NodeStatusRunning {
 			online++
 		}
 	}
 	return domain.Overview{
-		OnlineNodes:       fmt.Sprintf("%d / %d", online, len(nodes)),
+		OnlineNodes:       fmt.Sprintf("%d / %d", online, len(allNodes)),
 		ActiveConnections: active,
-		DailyTraffic:      "0 B",
-		RealIPCaptureRate: "ready",
+		DailyTraffic:      formatBytes(dailyBytes),
+		RealIPCaptureRate: fmt.Sprintf("%d 个", len(onlineIPs)),
 		Nodes:             nodes,
 		Rules:             rules,
 		Events:            events,
@@ -347,15 +377,15 @@ func (s *SQLite) UpsertNode(ctx context.Context, node domain.Node) error {
 }
 
 func (s *SQLite) Rules(ctx context.Context) ([]domain.RelayRule, error) {
-	return s.queryRules(ctx, `SELECT id, name, relay_node_id, client_node_id, listen, target, protocol, inbound, outbound, strategy, proxy_protocol, traffic, connections, status, enabled FROM rules ORDER BY created_at DESC`)
+	return s.queryRules(ctx, `SELECT id, name, relay_node_id, client_node_id, listen, target, tunnel_endpoint, protocol, inbound, outbound, strategy, proxy_protocol, traffic, connections, status, enabled FROM rules ORDER BY created_at DESC`)
 }
 
 func (s *SQLite) EnabledRules(ctx context.Context) ([]domain.RelayRule, error) {
-	return s.queryRules(ctx, `SELECT id, name, relay_node_id, client_node_id, listen, target, protocol, inbound, outbound, strategy, proxy_protocol, traffic, connections, status, enabled FROM rules WHERE enabled = 1 AND status = 'running' ORDER BY created_at DESC`)
+	return s.queryRules(ctx, `SELECT id, name, relay_node_id, client_node_id, listen, target, tunnel_endpoint, protocol, inbound, outbound, strategy, proxy_protocol, traffic, connections, status, enabled FROM rules WHERE enabled = 1 AND status = 'running' ORDER BY created_at DESC`)
 }
 
 func (s *SQLite) Rule(ctx context.Context, id string) (domain.RelayRule, error) {
-	rules, err := s.queryRules(ctx, `SELECT id, name, relay_node_id, client_node_id, listen, target, protocol, inbound, outbound, strategy, proxy_protocol, traffic, connections, status, enabled FROM rules WHERE id = ?`, id)
+	rules, err := s.queryRules(ctx, `SELECT id, name, relay_node_id, client_node_id, listen, target, tunnel_endpoint, protocol, inbound, outbound, strategy, proxy_protocol, traffic, connections, status, enabled FROM rules WHERE id = ?`, id)
 	if err != nil {
 		return domain.RelayRule{}, err
 	}
@@ -373,9 +403,9 @@ func (s *SQLite) CreateRule(ctx context.Context, input domain.RuleInput) (domain
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO rules (id, name, relay_node_id, client_node_id, listen, target, protocol, inbound, outbound, strategy, proxy_protocol, traffic, connections, status, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rule.ID, rule.Name, rule.RelayNodeID, rule.ClientNodeID, rule.Listen, rule.Target, rule.Protocol, rule.Inbound, rule.Outbound, rule.Strategy,
+		INSERT INTO rules (id, name, relay_node_id, client_node_id, listen, target, tunnel_endpoint, protocol, inbound, outbound, strategy, proxy_protocol, traffic, connections, status, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rule.ID, rule.Name, rule.RelayNodeID, rule.ClientNodeID, rule.Listen, rule.Target, rule.TunnelEndpoint, rule.Protocol, rule.Inbound, rule.Outbound, rule.Strategy,
 		string(proxyJSON), rule.Traffic, rule.Connections, rule.Status, boolInt(rule.Enabled), now, now)
 	if err != nil {
 		return domain.RelayRule{}, err
@@ -393,15 +423,38 @@ func (s *SQLite) UpdateRule(ctx context.Context, id string, input domain.RuleInp
 		return domain.RelayRule{}, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE rules SET name = ?, relay_node_id = ?, client_node_id = ?, listen = ?, target = ?, protocol = ?, inbound = ?, outbound = ?, strategy = ?,
+		UPDATE rules SET name = ?, relay_node_id = ?, client_node_id = ?, listen = ?, target = ?, tunnel_endpoint = ?, protocol = ?, inbound = ?, outbound = ?, strategy = ?,
 			proxy_protocol = ?, traffic = ?, connections = ?, status = ?, enabled = ?, updated_at = ?
 		WHERE id = ?`,
-		rule.Name, rule.RelayNodeID, rule.ClientNodeID, rule.Listen, rule.Target, rule.Protocol, rule.Inbound, rule.Outbound, rule.Strategy, string(proxyJSON),
+		rule.Name, rule.RelayNodeID, rule.ClientNodeID, rule.Listen, rule.Target, rule.TunnelEndpoint, rule.Protocol, rule.Inbound, rule.Outbound, rule.Strategy, string(proxyJSON),
 		rule.Traffic, rule.Connections, rule.Status, boolInt(rule.Enabled), time.Now().UTC().Format(time.RFC3339), id)
 	if err != nil {
 		return domain.RelayRule{}, err
 	}
 	return rule, nil
+}
+
+func (s *SQLite) UpdateRuleMetrics(ctx context.Context, metrics []domain.RuleMetric) error {
+	for _, metric := range metrics {
+		if strings.TrimSpace(metric.RuleID) == "" {
+			continue
+		}
+		connections := metric.ActiveConnections
+		if connections < 0 {
+			connections = 0
+		}
+		bytes := metric.TodayBytes
+		if bytes < 0 {
+			bytes = 0
+		}
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE rules SET connections = ?, traffic = ?, updated_at = ?
+			WHERE id = ?`,
+			connections, formatBytes(bytes), time.Now().UTC().Format(time.RFC3339), metric.RuleID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *SQLite) DeleteRule(ctx context.Context, id string) error {
@@ -533,7 +586,7 @@ func (s *SQLite) queryRules(ctx context.Context, query string, args ...any) ([]d
 		var rule domain.RelayRule
 		var proxyJSON string
 		var enabled int
-		if err := rows.Scan(&rule.ID, &rule.Name, &rule.RelayNodeID, &rule.ClientNodeID, &rule.Listen, &rule.Target, &rule.Protocol, &rule.Inbound, &rule.Outbound, &rule.Strategy, &proxyJSON, &rule.Traffic, &rule.Connections, &rule.Status, &enabled); err != nil {
+		if err := rows.Scan(&rule.ID, &rule.Name, &rule.RelayNodeID, &rule.ClientNodeID, &rule.Listen, &rule.Target, &rule.TunnelEndpoint, &rule.Protocol, &rule.Inbound, &rule.Outbound, &rule.Strategy, &proxyJSON, &rule.Traffic, &rule.Connections, &rule.Status, &enabled); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(proxyJSON), &rule.ProxyProtocol); err != nil {
@@ -565,19 +618,20 @@ func normalizeRuleInput(id string, input domain.RuleInput) domain.RelayRule {
 		input.Status = domain.RuleStatusRunning
 	}
 	return domain.RelayRule{
-		ID:            id,
-		Name:          input.Name,
-		RelayNodeID:   input.RelayNodeID,
-		ClientNodeID:  input.ClientNodeID,
-		Listen:        input.Listen,
-		Target:        input.Target,
-		Protocol:      input.Protocol,
-		Inbound:       input.Inbound,
-		Outbound:      input.Outbound,
-		Strategy:      input.Strategy,
-		ProxyProtocol: input.ProxyProtocol,
-		Status:        input.Status,
-		Enabled:       input.Enabled,
+		ID:             id,
+		Name:           input.Name,
+		RelayNodeID:    input.RelayNodeID,
+		ClientNodeID:   input.ClientNodeID,
+		Listen:         input.Listen,
+		Target:         input.Target,
+		TunnelEndpoint: input.TunnelEndpoint,
+		Protocol:       input.Protocol,
+		Inbound:        input.Inbound,
+		Outbound:       input.Outbound,
+		Strategy:       input.Strategy,
+		ProxyProtocol:  input.ProxyProtocol,
+		Status:         input.Status,
+		Enabled:        input.Enabled,
 	}
 }
 
@@ -594,6 +648,51 @@ func boolInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func formatBytes(bytes int64) string {
+	if bytes <= 0 {
+		return "0 B"
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
+	value := float64(bytes)
+	unit := 0
+	for value >= 1024 && unit < len(units)-1 {
+		value /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	return fmt.Sprintf("%.2f %s", value, units[unit])
+}
+
+func parseBytes(value string) int64 {
+	parts := strings.Fields(strings.TrimSpace(value))
+	if len(parts) == 0 {
+		return 0
+	}
+	number, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0
+	}
+	unit := "B"
+	if len(parts) > 1 {
+		unit = strings.ToUpper(parts[1])
+	}
+	multipliers := map[string]float64{
+		"B":  1,
+		"KB": 1024,
+		"MB": 1024 * 1024,
+		"GB": 1024 * 1024 * 1024,
+		"TB": 1024 * 1024 * 1024 * 1024,
+		"PB": 1024 * 1024 * 1024 * 1024 * 1024,
+	}
+	multiplier, ok := multipliers[unit]
+	if !ok {
+		return 0
+	}
+	return int64(number * multiplier)
 }
 
 func (s *SQLite) ensureColumn(ctx context.Context, table string, column string, definition string) error {

@@ -60,6 +60,9 @@ const (
 	StrategyIPHash     StrategyKind = "ip_hash"
 	StrategyLeastConn  StrategyKind = "least_conn"
 	StrategyFallback   StrategyKind = "fallback"
+	StrategyManual     StrategyKind = "manual"
+	StrategyLatency    StrategyKind = "latency"
+	StrategyWeighted   StrategyKind = "weighted"
 )
 
 type ProxyProtocolConfig struct {
@@ -81,36 +84,38 @@ type Node struct {
 }
 
 type RelayRule struct {
-	ID            string              `json:"id"`
-	Name          string              `json:"name"`
-	RelayNodeID   string              `json:"relayNodeId"`
-	ClientNodeID  string              `json:"clientNodeId"`
-	Listen        string              `json:"listen"`
-	Target        string              `json:"target"`
-	Protocol      string              `json:"protocol"`
-	Inbound       RelayProtocol       `json:"inbound"`
-	Outbound      RelayProtocol       `json:"outbound"`
-	Strategy      StrategyKind        `json:"strategy"`
-	ProxyProtocol ProxyProtocolConfig `json:"proxyProtocol"`
-	Traffic       string              `json:"traffic"`
-	Connections   int                 `json:"connections"`
-	Status        RuleStatus          `json:"status"`
-	Enabled       bool                `json:"enabled"`
+	ID             string              `json:"id"`
+	Name           string              `json:"name"`
+	RelayNodeID    string              `json:"relayNodeId"`
+	ClientNodeID   string              `json:"clientNodeId"`
+	Listen         string              `json:"listen"`
+	Target         string              `json:"target"`
+	TunnelEndpoint string              `json:"tunnelEndpoint"`
+	Protocol       string              `json:"protocol"`
+	Inbound        RelayProtocol       `json:"inbound"`
+	Outbound       RelayProtocol       `json:"outbound"`
+	Strategy       StrategyKind        `json:"strategy"`
+	ProxyProtocol  ProxyProtocolConfig `json:"proxyProtocol"`
+	Traffic        string              `json:"traffic"`
+	Connections    int                 `json:"connections"`
+	Status         RuleStatus          `json:"status"`
+	Enabled        bool                `json:"enabled"`
 }
 
 type RuleInput struct {
-	Name          string              `json:"name"`
-	RelayNodeID   string              `json:"relayNodeId"`
-	ClientNodeID  string              `json:"clientNodeId"`
-	Listen        string              `json:"listen"`
-	Target        string              `json:"target"`
-	Protocol      string              `json:"protocol"`
-	Inbound       RelayProtocol       `json:"inbound"`
-	Outbound      RelayProtocol       `json:"outbound"`
-	Strategy      StrategyKind        `json:"strategy"`
-	ProxyProtocol ProxyProtocolConfig `json:"proxyProtocol"`
-	Status        RuleStatus          `json:"status"`
-	Enabled       bool                `json:"enabled"`
+	Name           string              `json:"name"`
+	RelayNodeID    string              `json:"relayNodeId"`
+	ClientNodeID   string              `json:"clientNodeId"`
+	Listen         string              `json:"listen"`
+	Target         string              `json:"target"`
+	TunnelEndpoint string              `json:"tunnelEndpoint"`
+	Protocol       string              `json:"protocol"`
+	Inbound        RelayProtocol       `json:"inbound"`
+	Outbound       RelayProtocol       `json:"outbound"`
+	Strategy       StrategyKind        `json:"strategy"`
+	ProxyProtocol  ProxyProtocolConfig `json:"proxyProtocol"`
+	Status         RuleStatus          `json:"status"`
+	Enabled        bool                `json:"enabled"`
 }
 
 type OnlineIP struct {
@@ -166,21 +171,28 @@ type AgentRegisterRequest struct {
 }
 
 type AgentHeartbeatRequest struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Region   string     `json:"region"`
-	Role     NodeRole   `json:"role"`
-	Status   NodeStatus `json:"status"`
-	Load     string     `json:"load"`
-	Latency  string     `json:"latency"`
-	Traffic  string     `json:"traffic"`
-	LastSeen string     `json:"lastSeen"`
+	ID       string       `json:"id"`
+	Name     string       `json:"name"`
+	Region   string       `json:"region"`
+	Role     NodeRole     `json:"role"`
+	Status   NodeStatus   `json:"status"`
+	Load     string       `json:"load"`
+	Latency  string       `json:"latency"`
+	Traffic  string       `json:"traffic"`
+	LastSeen string       `json:"lastSeen"`
+	Metrics  []RuleMetric `json:"metrics"`
 }
 
 type AgentOnlineIPReport struct {
 	NodeID string     `json:"nodeId"`
 	Role   NodeRole   `json:"role"`
 	Items  []OnlineIP `json:"items"`
+}
+
+type RuleMetric struct {
+	RuleID            string `json:"ruleId"`
+	ActiveConnections int    `json:"activeConnections"`
+	TodayBytes        int64  `json:"todayBytes"`
 }
 
 type AgentBootstrapCommands struct {

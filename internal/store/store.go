@@ -17,6 +17,7 @@ type Store interface {
 	Rule(context.Context, string) (domain.RelayRule, error)
 	CreateRule(context.Context, domain.RuleInput) (domain.RelayRule, error)
 	UpdateRule(context.Context, string, domain.RuleInput) (domain.RelayRule, error)
+	UpdateRuleMetrics(context.Context, []domain.RuleMetric) error
 	DeleteRule(context.Context, string) error
 	RecordOnlineIP(context.Context, domain.OnlineIP) error
 	OnlineIPs(context.Context) ([]domain.OnlineIP, error)

@@ -49,13 +49,14 @@
         </nav>
 
         <div class="side-panel">
-          <span class="muted">当前策略</span>
-          <strong>故障转移优先</strong>
+          <span class="muted">策略概况</span>
+          <strong id="currentStrategyName">未配置</strong>
           <div class="strategy-line">
             <span></span>
             <span></span>
             <span></span>
           </div>
+          <small id="currentStrategyDetail">等待规则上报</small>
         </div>
       </aside>
 
@@ -82,23 +83,23 @@
           <div class="metric-grid">
             <article class="metric accent-green">
               <span>在线节点</span>
-              <strong>8 / 9</strong>
-              <small>HK5 正在重连</small>
+              <strong id="metricOnlineNodes">0 / 0</strong>
+              <small id="metricOnlineNodesHint">来自 agent 心跳</small>
             </article>
             <article class="metric accent-blue">
               <span>活跃连接</span>
-              <strong>12,846</strong>
-              <small>较 1 小时前 +8.2%</small>
+              <strong id="metricActiveConnections">0</strong>
+              <small>来自中转 agent 实时上报</small>
             </article>
             <article class="metric accent-violet">
               <span>今日流量</span>
-              <strong>4.72 TB</strong>
-              <small>入口 2.1 TB / 出口 2.6 TB</small>
+              <strong id="metricDailyTraffic">0 B</strong>
+              <small>按规则转发字节累计</small>
             </article>
             <article class="metric accent-amber">
               <span>真实 IP 捕获</span>
-              <strong>98.6%</strong>
-              <small>Proxy Protocol v2</small>
+              <strong id="metricRealIPs">0 个</strong>
+              <small>来自当前在线 IP 记录</small>
             </article>
           </div>
 
@@ -114,37 +115,7 @@
                   <button type="button">流量</button>
                 </div>
               </div>
-              <div class="topology" aria-label="实时拓扑图">
-                <div class="topology-col">
-                  <span class="topology-label">入口</span>
-                  <div class="node-dot online">SG1</div>
-                  <div class="node-dot online">JP2</div>
-                  <div class="node-dot warning">HK5</div>
-                </div>
-                <div class="flow-lines">
-                  <span class="line strong"></span>
-                  <span class="line"></span>
-                  <span class="line calm"></span>
-                </div>
-                <div class="topology-col center">
-                  <span class="topology-label">策略</span>
-                  <div class="policy-core">
-                    <strong>Fallback</strong>
-                    <small>IP hash + 健康检查</small>
-                  </div>
-                </div>
-                <div class="flow-lines">
-                  <span class="line calm"></span>
-                  <span class="line strong"></span>
-                  <span class="line"></span>
-                </div>
-                <div class="topology-col">
-                  <span class="topology-label">出口</span>
-                  <div class="node-dot online">US-LA</div>
-                  <div class="node-dot online">DE-FRA</div>
-                  <div class="node-dot online">NL-AMS</div>
-                </div>
-              </div>
+              <div class="topology" id="topologyGraph" aria-label="实时拓扑图"></div>
             </section>
 
             <section class="panel event-panel">
@@ -382,6 +353,7 @@
             <select id="ruleProtocolInput">
               <option value="TCP">TCP（含 UDP）</option>
               <option>UDP</option>
+              <option value="TCP Tunnel">TCP 隧道</option>
               <option>TCP + TLS</option>
               <option>WS + TLS</option>
               <option>WS</option>
@@ -403,6 +375,23 @@
           <label>
             目标地址
             <input id="ruleTargetInput" type="text" value="localhost:8080">
+          </label>
+          <label>
+            隧道端点
+            <input id="ruleTunnelEndpointInput" type="text" placeholder="仅 TCP 隧道需要，例如 客户端IP:19100">
+          </label>
+          <label>
+            策略
+            <select id="ruleStrategyInput">
+              <option value="single">单目标直连</option>
+              <option value="manual">手动选择</option>
+              <option value="fallback">故障转移优先</option>
+              <option value="round_robin">轮询负载均衡</option>
+              <option value="least_conn">最少连接</option>
+              <option value="ip_hash">来源 IP Hash</option>
+              <option value="latency">最低延迟</option>
+              <option value="weighted">权重分配</option>
+            </select>
           </label>
         </div>
 

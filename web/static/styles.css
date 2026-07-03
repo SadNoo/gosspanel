@@ -133,6 +133,13 @@ button {
   margin-top: 4px;
 }
 
+.side-panel small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .strategy-line {
   display: grid;
   grid-template-columns: 1fr 0.7fr 0.45fr;
@@ -402,6 +409,10 @@ p {
   font-weight: 700;
 }
 
+.topology .empty-state {
+  grid-column: 1 / -1;
+}
+
 .node-dot,
 .policy-core {
   display: grid;
@@ -453,6 +464,28 @@ p {
 
 .line.calm {
   background: linear-gradient(90deg, rgba(124, 58, 237, 0.18), var(--violet));
+}
+
+.empty-state,
+.empty-cell {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 112px;
+  width: 100%;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(248, 251, 253, 0.78);
+}
+
+.empty-cell {
+  padding: 28px 12px;
 }
 
 .event-list {

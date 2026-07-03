@@ -1,86 +1,15 @@
-let nodes = [
-  { name: "HK5", region: "Hong Kong", status: "warning", load: "71%", latency: "18 ms", traffic: "1.42 TB" },
-  { name: "SG1", region: "Singapore", status: "running", load: "46%", latency: "36 ms", traffic: "812 GB" },
-  { name: "JP2", region: "Tokyo", status: "running", load: "39%", latency: "42 ms", traffic: "698 GB" },
-  { name: "US-LA", region: "Los Angeles", status: "running", load: "58%", latency: "142 ms", traffic: "1.08 TB" },
-  { name: "DE-FRA", region: "Frankfurt", status: "running", load: "32%", latency: "184 ms", traffic: "436 GB" },
-  { name: "NL-AMS", region: "Amsterdam", status: "running", load: "28%", latency: "176 ms", traffic: "391 GB" }
-];
-
-let relayMachines = [
-  { name: "Relay Demo", region: "Relay", status: "warning", load: "0%", latency: "-", traffic: "0 B" }
-];
-
-let rules = [
-  {
-    name: "HK 游戏端口段",
-    detail: "20000-20100 / TCP+TLS",
-    listen: "HK5 :20000-20100",
-    target: "US-LA :443",
-    protocol: "TCP+TLS",
-    strategy: "Fallback",
-    proxy: "v2 发送",
-    traffic: "1.82 TB",
-    connections: 4821,
-    status: "running"
-  },
-  {
-    name: "SG WebSocket 中转",
-    detail: "443 / WSS",
-    listen: "SG1 :443",
-    target: "DE-FRA :8443",
-    protocol: "WSS",
-    strategy: "IP Hash",
-    proxy: "v2 接收+发送",
-    traffic: "944 GB",
-    connections: 3194,
-    status: "running"
-  },
-  {
-    name: "JP 备用入口",
-    detail: "18080 / TCP",
-    listen: "JP2 :18080",
-    target: "NL-AMS :18080",
-    protocol: "TCP",
-    strategy: "Round Robin",
-    proxy: "关闭",
-    traffic: "312 GB",
-    connections: 876,
-    status: "paused"
-  },
-  {
-    name: "HK5 低延迟组",
-    detail: "30000-30100 / TCP",
-    listen: "HK5 :30000-30100",
-    target: "US-LA, DE-FRA",
-    protocol: "TCP",
-    strategy: "Least Conn",
-    proxy: "v1 发送",
-    traffic: "1.14 TB",
-    connections: 3955,
-    status: "warning"
-  }
-];
-
-let events = [
-  { tone: "warn", title: "HK5 健康检查抖动", text: "3 分钟内出现 2 次重连", time: "刚刚" },
-  { tone: "info", title: "证书续期完成", text: "relay.example.com 已部署到 2 条规则", time: "8 分钟前" },
-  { tone: "ok", title: "US-LA 出口恢复", text: "Fallback 策略已切回主出口", time: "21 分钟前" },
-  { tone: "info", title: "新增在线 IP 峰值", text: "SG1 入口 15 分钟内 1,248 个来源", time: "34 分钟前" }
-];
-
-let ips = [
-  { ip: "来源 A", rule: "HK 游戏端口段", entry: "HK5", conns: 142, active: "12 秒前", pct: 92 },
-  { ip: "来源 B", rule: "SG WebSocket 中转", entry: "SG1", conns: 96, active: "28 秒前", pct: 71 },
-  { ip: "来源 C", rule: "HK5 低延迟组", entry: "HK5", conns: 74, active: "1 分钟前", pct: 58 },
-  { ip: "来源 D", rule: "SG WebSocket 中转", entry: "SG1", conns: 51, active: "2 分钟前", pct: 39 }
-];
-
-let certs = [
-  { name: "relay.example.com", issuer: "Let's Encrypt / Cloudflare DNS", days: 72, used: "WSS, TCP+TLS" },
-  { name: "*.edge.example.com", issuer: "ZeroSSL / DNSPod", days: 41, used: "多入口规则" },
-  { name: "hk5.example.net", issuer: "Let's Encrypt / HTTP-01", days: 19, used: "HK5 入口" }
-];
+let nodes = [];
+let relayMachines = [];
+let rules = [];
+let events = [];
+let ips = [];
+let certs = [];
+let overviewMetrics = {
+  onlineNodes: "0 / 0",
+  activeConnections: 0,
+  dailyTraffic: "0 B",
+  realIPCaptureRate: "0 个"
+};
 
 let accountSettings = {
   username: ""
@@ -90,6 +19,28 @@ const statusText = {
   running: "运行中",
   warning: "告警",
   paused: "已暂停"
+};
+
+const strategyText = {
+  single: "单目标直连",
+  manual: "手动选择",
+  fallback: "故障转移优先",
+  round_robin: "轮询负载均衡",
+  least_conn: "最少连接",
+  ip_hash: "来源 IP Hash",
+  latency: "最低延迟",
+  weighted: "权重分配"
+};
+
+const strategyDetail = {
+  single: "当前规则只连接配置的目标地址",
+  manual: "固定使用人工选择的目标",
+  fallback: "主目标异常后切到备用目标",
+  round_robin: "按顺序分摊到多个目标",
+  least_conn: "优先选择当前连接更少的目标",
+  ip_hash: "同一来源 IP 尽量落到同一目标",
+  latency: "优先选择健康检查延迟最低的目标",
+  weighted: "按权重比例分配到目标组"
 };
 
 const navButtons = document.querySelectorAll("[data-view]");
@@ -119,6 +70,24 @@ function statusBadge(status) {
   return `<span class="status ${status}">${statusText[status]}</span>`;
 }
 
+function strategyLabel(strategy) {
+  return strategyText[strategy] || strategy || "未配置";
+}
+
+function emptyState(text) {
+  return `<div class="empty-state">${text}</div>`;
+}
+
+function emptyTable(message, colspan) {
+  return `<tr><td class="empty-cell" colspan="${colspan}">${message}</td></tr>`;
+}
+
+function shortName(value) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  return text.length > 10 ? text.slice(0, 10) : text;
+}
+
 function showToast(message, tone = "") {
   let toast = document.querySelector("#appToast");
   if (!toast) {
@@ -134,7 +103,12 @@ function showToast(message, tone = "") {
 }
 
 function renderEvents() {
-  document.querySelector("#eventList").innerHTML = events
+  const eventList = document.querySelector("#eventList");
+  if (!events.length) {
+    eventList.innerHTML = emptyState("暂无事件");
+    return;
+  }
+  eventList.innerHTML = events
     .map(
       (event) => `
         <div class="event-item">
@@ -148,6 +122,76 @@ function renderEvents() {
       `
     )
     .join("");
+}
+
+function renderMetrics() {
+  document.querySelector("#metricOnlineNodes").textContent = overviewMetrics.onlineNodes;
+  document.querySelector("#metricActiveConnections").textContent = Number(overviewMetrics.activeConnections || 0).toLocaleString();
+  document.querySelector("#metricDailyTraffic").textContent = overviewMetrics.dailyTraffic || "0 B";
+  document.querySelector("#metricRealIPs").textContent = overviewMetrics.realIPCaptureRate || "0 个";
+  const totalNodes = [...relayMachines, ...nodes].length;
+  const onlineNodes = [...relayMachines, ...nodes].filter((node) => node.status === "running").length;
+  document.querySelector("#metricOnlineNodesHint").textContent = totalNodes ? `${onlineNodes} 台在线，${totalNodes - onlineNodes} 台非运行` : "暂无 agent 接入";
+}
+
+function renderStrategySummary() {
+  const runningRules = rules.filter((rule) => rule.status === "running");
+  const strategyCounts = runningRules.reduce((acc, rule) => {
+    acc[rule.strategy] = (acc[rule.strategy] || 0) + 1;
+    return acc;
+  }, {});
+  const topStrategy = Object.entries(strategyCounts).sort((a, b) => b[1] - a[1])[0];
+  const name = topStrategy ? strategyLabel(topStrategy[0]) : "未配置";
+  document.querySelector("#currentStrategyName").textContent = name;
+  document.querySelector("#currentStrategyDetail").textContent = topStrategy
+    ? `${topStrategy[1]} 条运行规则，${strategyDetail[topStrategy[0]] || "按规则配置执行"}`
+    : "暂无运行规则";
+}
+
+function renderTopology() {
+  const graph = document.querySelector("#topologyGraph");
+  const relays = relayMachines.slice(0, 4);
+  const clients = nodes.slice(0, 4);
+  const strategies = [...new Set(rules.filter((rule) => rule.status === "running").map((rule) => rule.strategy || "single"))].slice(0, 3);
+  if (!relays.length && !clients.length && !rules.length) {
+    graph.innerHTML = emptyState("暂无节点和规则数据");
+    return;
+  }
+  graph.innerHTML = `
+    <div class="topology-col">
+      <span class="topology-label">中转</span>
+      ${
+        relays.length
+          ? relays.map((node) => `<div class="node-dot ${node.status === "running" ? "online" : "warning"}">${shortName(node.name)}</div>`).join("")
+          : `<div class="node-dot warning">未接入</div>`
+      }
+    </div>
+    <div class="flow-lines">
+      <span class="line strong"></span>
+      <span class="line"></span>
+      <span class="line calm"></span>
+    </div>
+    <div class="topology-col center">
+      <span class="topology-label">策略</span>
+      <div class="policy-core">
+        <strong>${strategies.length ? strategies.map(strategyLabel).join(" / ") : "单目标"}</strong>
+        <small>${rules.length} 条规则</small>
+      </div>
+    </div>
+    <div class="flow-lines">
+      <span class="line calm"></span>
+      <span class="line strong"></span>
+      <span class="line"></span>
+    </div>
+    <div class="topology-col">
+      <span class="topology-label">客户端/目标</span>
+      ${
+        clients.length
+          ? clients.map((node) => `<div class="node-dot ${node.status === "running" ? "online" : "warning"}">${shortName(node.name)}</div>`).join("")
+          : `<div class="node-dot warning">直连目标</div>`
+      }
+    </div>
+  `;
 }
 
 async function apiFetch(path, options = {}) {
@@ -182,7 +226,8 @@ function normalizeRule(rule) {
     ...rule,
     detail: `${rule.listen} / ${rule.protocol}`,
     proxy: proxyLabel(rule.proxyProtocol),
-    strategy: rule.strategy || "single"
+    strategy: rule.strategy || "single",
+    strategyName: strategyLabel(rule.strategy || "single")
   };
 }
 
@@ -190,6 +235,7 @@ function protocolToRelayProtocol(protocol) {
   const normalized = protocol.replace(/\s+/g, "").toUpperCase();
   if (normalized === "TCP") return "direct_tcp";
   if (normalized === "UDP") return "direct_udp";
+  if (normalized === "TCPTUNNEL" || normalized === "TCP隧道") return "tcp_tunnel";
   if (normalized === "TCP+TLS") return "tls";
   if (normalized === "WS") return "ws";
   if (normalized === "WS+TLS") return "ws_tls";
@@ -207,10 +253,21 @@ async function loadData() {
     apiFetch("/api/agent/bootstrap")
   ]);
   if (!overview) return;
+  overviewMetrics = {
+    onlineNodes: overview.onlineNodes || "0 / 0",
+    activeConnections: overview.activeConnections || 0,
+    dailyTraffic: overview.dailyTraffic || "0 B",
+    realIPCaptureRate: overview.realIPCaptureRate || "0 个"
+  };
   nodes = overview.nodes || [];
   relayMachines = relayMachineItems || [];
   rules = (overview.rules || []).map(normalizeRule);
-  events = overview.events || [];
+  events = (overview.events || []).map((event) => ({
+    tone: event.level || "info",
+    title: event.title,
+    text: event.body,
+    time: event.time
+  }));
   ips = (onlineIps || []).map((item, index) => ({
     ip: item.ip,
     rule: item.ruleName,
@@ -242,10 +299,15 @@ function filteredRules() {
 }
 
 function renderOverviewRules() {
-  document.querySelector("#overviewRules").innerHTML = rules
+  const visibleRules = rules
     .slice()
     .sort((a, b) => b.connections - a.connections)
-    .slice(0, 3)
+    .slice(0, 3);
+  if (!visibleRules.length) {
+    document.querySelector("#overviewRules").innerHTML = emptyTable("暂无规则数据", 7);
+    return;
+  }
+  document.querySelector("#overviewRules").innerHTML = visibleRules
     .map(
       (rule) => `
         <tr>
@@ -266,7 +328,8 @@ function renderNodes() {
   const keyword = globalSearch.value.trim().toLowerCase();
   const visibleNodes = nodes.filter((node) => `${node.name} ${node.region}`.toLowerCase().includes(keyword));
 
-  document.querySelector("#nodeGrid").innerHTML = visibleNodes
+  document.querySelector("#nodeGrid").innerHTML = visibleNodes.length
+    ? visibleNodes
     .map(
       (node) => `
         <article class="node-card">
@@ -285,14 +348,16 @@ function renderNodes() {
         </article>
       `
     )
-    .join("");
+    .join("")
+    : emptyState("暂无客户端机器接入");
 }
 
 function renderRelayMachines() {
   const keyword = globalSearch.value.trim().toLowerCase();
   const visibleRelays = relayMachines.filter((node) => `${node.name} ${node.region}`.toLowerCase().includes(keyword));
 
-  document.querySelector("#relayMachineGrid").innerHTML = visibleRelays
+  document.querySelector("#relayMachineGrid").innerHTML = visibleRelays.length
+    ? visibleRelays
     .map(
       (node) => `
         <article class="node-card">
@@ -311,11 +376,17 @@ function renderRelayMachines() {
         </article>
       `
     )
-    .join("");
+    .join("")
+    : emptyState("暂无中转机器接入");
 }
 
 function renderRules() {
-  document.querySelector("#ruleTable").innerHTML = filteredRules()
+  const visibleRules = filteredRules();
+  if (!visibleRules.length) {
+    document.querySelector("#ruleTable").innerHTML = emptyTable("暂无中转规则", 9);
+    return;
+  }
+  document.querySelector("#ruleTable").innerHTML = visibleRules
     .map(
       (rule) => `
         <tr data-rule-id="${rule.id}">
@@ -327,7 +398,7 @@ function renderRules() {
           <td>${rule.clientNodeId || "未绑定"}</td>
           <td>${rule.listen}</td>
           <td>${rule.target}</td>
-          <td>${rule.strategy}</td>
+          <td>${rule.strategyName}</td>
           <td><span class="tag">${rule.proxy}</span></td>
           <td>${rule.traffic}</td>
           <td>
@@ -344,7 +415,8 @@ function renderRules() {
 }
 
 function renderIps() {
-  document.querySelector("#ipRank").innerHTML = ips
+  document.querySelector("#ipRank").innerHTML = ips.length
+    ? ips
     .map(
       (item) => `
         <div class="rank-item">
@@ -356,9 +428,11 @@ function renderIps() {
         </div>
       `
     )
-    .join("");
+    .join("")
+    : emptyState("暂无真实 IP 捕获");
 
-  document.querySelector("#ipTable").innerHTML = ips
+  document.querySelector("#ipTable").innerHTML = ips.length
+    ? ips
     .map(
       (item) => `
         <tr>
@@ -370,11 +444,13 @@ function renderIps() {
         </tr>
       `
     )
-    .join("");
+    .join("")
+    : emptyTable("暂无真实 IP 记录", 5);
 }
 
 function renderCerts() {
-  document.querySelector("#certGrid").innerHTML = certs
+  document.querySelector("#certGrid").innerHTML = certs.length
+    ? certs
     .map((cert) => {
       const pct = Math.max(0, Math.min(100, Math.round((cert.days / 90) * 100)));
       return `
@@ -394,7 +470,8 @@ function renderCerts() {
         </article>
       `;
     })
-    .join("");
+    .join("")
+    : emptyState("暂无证书");
 }
 
 function renderSettings() {
@@ -427,6 +504,9 @@ function renderClientOptions() {
 }
 
 function renderAll() {
+  renderMetrics();
+  renderStrategySummary();
+  renderTopology();
   renderEvents();
   renderOverviewRules();
   renderNodes();
@@ -452,6 +532,8 @@ function resetRuleForm() {
   document.querySelector("#ruleProtocolInput").value = "TCP";
   document.querySelector("#ruleListenInput").value = ":19090";
   document.querySelector("#ruleTargetInput").value = "localhost:8080";
+  document.querySelector("#ruleTunnelEndpointInput").value = "";
+  document.querySelector("#ruleStrategyInput").value = "single";
   proxyVersion = "v2";
   if (proxyProtocolSwitch) proxyProtocolSwitch.checked = true;
   syncProxyButtons();
@@ -477,6 +559,8 @@ function openModal(rule = null) {
     document.querySelector("#ruleProtocolInput").value = rule.protocol || "TCP";
     document.querySelector("#ruleListenInput").value = rule.listen || "";
     document.querySelector("#ruleTargetInput").value = rule.target || "";
+    document.querySelector("#ruleTunnelEndpointInput").value = rule.tunnelEndpoint || "";
+    document.querySelector("#ruleStrategyInput").value = rule.strategy || "single";
     renderRelayOptions();
     renderClientOptions();
     document.querySelector("#ruleRelayNodeInput").value = rule.relayNodeId || "";
@@ -548,10 +632,11 @@ function rulePayloadFromForm(base = {}) {
     clientNodeId: document.querySelector("#ruleClientNodeInput").value,
     listen: document.querySelector("#ruleListenInput").value.trim(),
     target: document.querySelector("#ruleTargetInput").value.trim(),
+    tunnelEndpoint: document.querySelector("#ruleTunnelEndpointInput").value.trim(),
     protocol,
     inbound: relayProtocol,
     outbound: relayProtocol,
-    strategy: base.strategy || "single",
+    strategy: document.querySelector("#ruleStrategyInput").value || base.strategy || "single",
     status: base.status || "running",
     enabled: base.enabled ?? true,
     proxyProtocol: {
@@ -569,6 +654,7 @@ function rulePayloadFromRule(rule, overrides = {}) {
     clientNodeId: rule.clientNodeId,
     listen: rule.listen,
     target: rule.target,
+    tunnelEndpoint: rule.tunnelEndpoint,
     protocol: rule.protocol,
     inbound: rule.inbound,
     outbound: rule.outbound,
@@ -743,6 +829,7 @@ document.addEventListener("keydown", (event) => {
 
 loadData()
   .catch((error) => {
-    console.warn("Failed to load API data, using local preview data", error);
+    console.warn("Failed to load API data", error);
+    showToast(error.message, "error");
   })
   .finally(renderAll);

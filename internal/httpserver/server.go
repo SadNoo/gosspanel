@@ -303,6 +303,9 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		Traffic:  req.Traffic,
 		LastSeen: req.LastSeen,
 	})
+	if err == nil && len(req.Metrics) > 0 {
+		err = s.store.UpdateRuleMetrics(r.Context(), req.Metrics)
+	}
 	writeResult(w, map[string]string{"status": "ok"}, err)
 }
 
@@ -421,6 +424,10 @@ func decodeRuleInput(w http.ResponseWriter, r *http.Request) (domain.RuleInput, 
 	}
 	if input.Name == "" || input.RelayNodeID == "" || input.Listen == "" || input.Target == "" {
 		writeError(w, http.StatusBadRequest, errors.New("name, relayNodeId, listen and target are required"))
+		return input, false
+	}
+	if input.Inbound == domain.RelayProtocolTunnelTCP && strings.TrimSpace(input.TunnelEndpoint) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("tunnelEndpoint is required for tcp tunnel"))
 		return input, false
 	}
 	return input, true

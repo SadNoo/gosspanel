@@ -40,11 +40,14 @@ func Run(ctx context.Context, args []string, logger *slog.Logger) error {
 	client := &http.Client{Timeout: 15 * time.Second}
 	recorder := panelRecorder{client: client, cfg: cfg}
 	var relayManager *relay.Manager
+	var tunnelManager *relay.TunnelManager
 	if cfg.Role == domain.NodeRoleRelay {
 		relayManager = relay.NewManager(logger, recorder)
 		defer relayManager.Close()
 		logger.Info("relay backend enabled", "node", cfg.NodeID)
 	} else {
+		tunnelManager = relay.NewTunnelManager(logger)
+		defer tunnelManager.Close()
 		logger.Info("client backend enabled", "node", cfg.NodeID)
 	}
 	if err := postJSON(client, cfg, "/api/agent/register", domain.AgentRegisterRequest{
@@ -60,13 +63,22 @@ func Run(ctx context.Context, args []string, logger *slog.Logger) error {
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 	for {
-		rules, err := heartbeat(client, cfg, logger)
+		var metrics []domain.RuleMetric
+		if relayManager != nil {
+			metrics = relayManager.Metrics()
+		}
+		rules, err := heartbeat(client, cfg, logger, metrics)
 		if err != nil {
 			logger.Warn("agent heartbeat failed", "error", err)
 		} else if relayManager != nil {
 			if err := relayManager.SyncRules(rules); err != nil {
 				logger.Warn("relay sync failed", "error", err)
 			}
+		} else if tunnelManager != nil {
+			if err := tunnelManager.SyncRules(rules); err != nil {
+				logger.Warn("client tunnel sync failed", "error", err)
+			}
+			logger.Info("client rules synced", "rules", len(rules))
 		} else {
 			logger.Info("client rules synced", "rules", len(rules))
 		}
@@ -120,7 +132,7 @@ func parseArgs(args []string) (Config, error) {
 	return cfg, nil
 }
 
-func heartbeat(client *http.Client, cfg Config, logger *slog.Logger) ([]domain.RelayRule, error) {
+func heartbeat(client *http.Client, cfg Config, logger *slog.Logger, metrics []domain.RuleMetric) ([]domain.RelayRule, error) {
 	req := domain.AgentHeartbeatRequest{
 		ID:       cfg.NodeID,
 		Name:     cfg.Name,
@@ -131,6 +143,7 @@ func heartbeat(client *http.Client, cfg Config, logger *slog.Logger) ([]domain.R
 		Latency:  "-",
 		Traffic:  "0 B",
 		LastSeen: time.Now().Format("15:04:05"),
+		Metrics:  metrics,
 	}
 	if err := postJSON(client, cfg, "/api/agent/heartbeat", req); err != nil {
 		return nil, err

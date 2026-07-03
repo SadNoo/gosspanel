@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SadNoo/gosspanel/internal/domain"
@@ -30,6 +31,17 @@ type listenerState struct {
 	tcpListener net.Listener
 	udpConn     *net.UDPConn
 	cancel      context.CancelFunc
+	stats       *ruleStats
+}
+
+type ruleStats struct {
+	active int64
+	bytes  int64
+}
+
+type copyResult struct {
+	bytes int64
+	err   error
 }
 
 func NewManager(logger *slog.Logger, recorder OnlineIPRecorder) *Manager {
@@ -76,7 +88,7 @@ func (m *Manager) SyncRules(rules []domain.RelayRule) error {
 
 func (m *Manager) startRule(rule domain.RelayRule) (*listenerState, error) {
 	runCtx, cancel := context.WithCancel(context.Background())
-	state := &listenerState{rule: rule, cancel: cancel}
+	state := &listenerState{rule: rule, cancel: cancel, stats: &ruleStats{}}
 	if isUDP(rule) {
 		conn, err := listenUDP(rule.Listen)
 		if err != nil {
@@ -117,6 +129,20 @@ func (m *Manager) Close() {
 	}
 }
 
+func (m *Manager) Metrics() []domain.RuleMetric {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	metrics := make([]domain.RuleMetric, 0, len(m.running))
+	for _, state := range m.running {
+		metrics = append(metrics, domain.RuleMetric{
+			RuleID:            state.rule.ID,
+			ActiveConnections: int(atomic.LoadInt64(&state.stats.active)),
+			TodayBytes:        atomic.LoadInt64(&state.stats.bytes),
+		})
+	}
+	return metrics
+}
+
 func (s *listenerState) close() {
 	s.cancel()
 	if s.tcpListener != nil {
@@ -139,7 +165,7 @@ func (m *Manager) serveTCP(ctx context.Context, state *listenerState) {
 				continue
 			}
 		}
-		go m.handleConn(ctx, state.rule, conn)
+		go m.handleConn(ctx, state, conn)
 	}
 }
 
@@ -158,11 +184,15 @@ func (m *Manager) serveUDP(ctx context.Context, state *listenerState) {
 		}
 		payload := make([]byte, n)
 		copy(payload, buffer[:n])
-		go m.handleUDP(ctx, state.rule, state.udpConn, clientAddr, payload)
+		go m.handleUDP(ctx, state, state.udpConn, clientAddr, payload)
 	}
 }
 
-func (m *Manager) handleUDP(ctx context.Context, rule domain.RelayRule, inbound *net.UDPConn, clientAddr *net.UDPAddr, payload []byte) {
+func (m *Manager) handleUDP(ctx context.Context, state *listenerState, inbound *net.UDPConn, clientAddr *net.UDPAddr, payload []byte) {
+	rule := state.rule
+	atomic.AddInt64(&state.stats.active, 1)
+	defer atomic.AddInt64(&state.stats.active, -1)
+
 	targetAddr, err := net.ResolveUDPAddr("udp", rule.Target)
 	if err != nil {
 		m.logger.Warn("udp relay target resolve failed", "rule", rule.Name, "target", rule.Target, "error", err)
@@ -179,6 +209,7 @@ func (m *Manager) handleUDP(ctx context.Context, rule domain.RelayRule, inbound 
 		m.logger.Warn("udp relay write failed", "rule", rule.Name, "target", rule.Target, "error", err)
 		return
 	}
+	atomic.AddInt64(&state.stats.bytes, int64(len(payload)))
 	m.recordOnlineAddr(ctx, rule, clientAddr)
 
 	response := make([]byte, 65535)
@@ -193,9 +224,13 @@ func (m *Manager) handleUDP(ctx context.Context, rule domain.RelayRule, inbound 
 	if _, err := inbound.WriteToUDP(response[:n], clientAddr); err != nil {
 		m.logger.Warn("udp relay response write failed", "rule", rule.Name, "client", clientAddr.String(), "error", err)
 	}
+	atomic.AddInt64(&state.stats.bytes, int64(n))
 }
 
-func (m *Manager) handleConn(ctx context.Context, rule domain.RelayRule, inbound net.Conn) {
+func (m *Manager) handleConn(ctx context.Context, state *listenerState, inbound net.Conn) {
+	rule := state.rule
+	atomic.AddInt64(&state.stats.active, 1)
+	defer atomic.AddInt64(&state.stats.active, -1)
 	defer inbound.Close()
 
 	sourceConn := inbound
@@ -208,6 +243,11 @@ func (m *Manager) handleConn(ctx context.Context, rule domain.RelayRule, inbound
 		}
 		sourceConn = wrapped
 		sourceAddr = &net.TCPAddr{IP: info.srcIP, Port: info.srcPort}
+	}
+
+	if isTCPTunnel(rule) {
+		m.handleTunnelConn(ctx, state, sourceConn, sourceAddr)
+		return
 	}
 
 	outbound, err := net.DialTimeout("tcp", rule.Target, 10*time.Second)
@@ -228,10 +268,47 @@ func (m *Manager) handleConn(ctx context.Context, rule domain.RelayRule, inbound
 		m.recordOnlineAddr(ctx, rule, tcpAddr)
 	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan copyResult, 2)
 	go proxyCopy(errCh, outbound, sourceConn)
 	go proxyCopy(errCh, sourceConn, outbound)
-	<-errCh
+	first := <-errCh
+	_ = outbound.Close()
+	_ = sourceConn.Close()
+	second := <-errCh
+	atomic.AddInt64(&state.stats.bytes, first.bytes+second.bytes)
+}
+
+func (m *Manager) handleTunnelConn(ctx context.Context, state *listenerState, sourceConn net.Conn, sourceAddr net.Addr) {
+	rule := state.rule
+	outbound, err := net.DialTimeout("tcp", rule.TunnelEndpoint, 10*time.Second)
+	if err != nil {
+		m.logger.Warn("relay tunnel dial failed", "rule", rule.Name, "endpoint", rule.TunnelEndpoint, "error", err)
+		return
+	}
+	defer outbound.Close()
+
+	if err := writeTunnelRequest(outbound, tunnelRequest{
+		RuleID:        rule.ID,
+		Target:        rule.Target,
+		SourceAddr:    sourceAddr.String(),
+		ProxyProtocol: rule.ProxyProtocol,
+	}); err != nil {
+		m.logger.Warn("relay tunnel header failed", "rule", rule.Name, "endpoint", rule.TunnelEndpoint, "error", err)
+		return
+	}
+
+	if tcpAddr, ok := sourceAddr.(*net.TCPAddr); ok {
+		m.recordOnlineAddr(ctx, rule, tcpAddr)
+	}
+
+	errCh := make(chan copyResult, 2)
+	go proxyCopy(errCh, outbound, sourceConn)
+	go proxyCopy(errCh, sourceConn, outbound)
+	first := <-errCh
+	_ = outbound.Close()
+	_ = sourceConn.Close()
+	second := <-errCh
+	atomic.AddInt64(&state.stats.bytes, first.bytes+second.bytes)
 }
 
 func (m *Manager) recordOnlineAddr(ctx context.Context, rule domain.RelayRule, addr net.Addr) {
@@ -257,9 +334,11 @@ func runnable(rule domain.RelayRule) bool {
 	return rule.Enabled &&
 		rule.Status == domain.RuleStatusRunning &&
 		((rule.Inbound == domain.RelayProtocolDirectTCP && rule.Outbound == domain.RelayProtocolDirectTCP) ||
-			(rule.Inbound == domain.RelayProtocolDirectUDP && rule.Outbound == domain.RelayProtocolDirectUDP)) &&
+			(rule.Inbound == domain.RelayProtocolDirectUDP && rule.Outbound == domain.RelayProtocolDirectUDP) ||
+			(rule.Inbound == domain.RelayProtocolTunnelTCP && rule.Outbound == domain.RelayProtocolTunnelTCP)) &&
 		rule.Listen != "" &&
-		rule.Target != ""
+		rule.Target != "" &&
+		(!isTCPTunnel(rule) || rule.TunnelEndpoint != "")
 }
 
 func isUDP(rule domain.RelayRule) bool {
@@ -268,6 +347,10 @@ func isUDP(rule domain.RelayRule) bool {
 
 func isTCP(rule domain.RelayRule) bool {
 	return rule.Inbound == domain.RelayProtocolDirectTCP && rule.Outbound == domain.RelayProtocolDirectTCP
+}
+
+func isTCPTunnel(rule domain.RelayRule) bool {
+	return rule.Inbound == domain.RelayProtocolTunnelTCP && rule.Outbound == domain.RelayProtocolTunnelTCP
 }
 
 func listenUDP(listen string) (*net.UDPConn, error) {
@@ -281,6 +364,7 @@ func listenUDP(listen string) (*net.UDPConn, error) {
 func shouldRestart(next domain.RelayRule, current domain.RelayRule) bool {
 	return next.Listen != current.Listen ||
 		next.Target != current.Target ||
+		next.TunnelEndpoint != current.TunnelEndpoint ||
 		next.Inbound != current.Inbound ||
 		next.Outbound != current.Outbound ||
 		!reflect.DeepEqual(next.ProxyProtocol, current.ProxyProtocol)
@@ -322,10 +406,10 @@ func trusted(cidrs []string, addr net.Addr) bool {
 	return false
 }
 
-func proxyCopy(errCh chan<- error, dst io.Writer, src io.Reader) {
-	_, err := io.Copy(dst, src)
+func proxyCopy(errCh chan<- copyResult, dst io.Writer, src io.Reader) {
+	n, err := io.Copy(dst, src)
 	if errors.Is(err, net.ErrClosed) {
 		err = nil
 	}
-	errCh <- err
+	errCh <- copyResult{bytes: n, err: err}
 }

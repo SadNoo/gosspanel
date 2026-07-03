@@ -30,6 +30,7 @@ type listenerState struct {
 	rule        domain.RelayRule
 	tcpListener net.Listener
 	udpConn     *net.UDPConn
+	gost        *gostProcess
 	cancel      context.CancelFunc
 	stats       *ruleStats
 }
@@ -65,7 +66,7 @@ func (m *Manager) SyncRules(rules []domain.RelayRule) error {
 
 	for id, state := range m.running {
 		rule, ok := want[id]
-		if !ok || shouldRestart(rule, state.rule) {
+		if !ok || shouldRestart(rule, state.rule) || gostStopped(state.gost) {
 			state.close()
 			delete(m.running, id)
 		}
@@ -89,6 +90,14 @@ func (m *Manager) SyncRules(rules []domain.RelayRule) error {
 func (m *Manager) startRule(rule domain.RelayRule) (*listenerState, error) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	state := &listenerState{rule: rule, cancel: cancel, stats: &ruleStats{}}
+	if isGost(rule) {
+		gost, err := startGostRelay(runCtx, rule, m.logger)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		state.gost = gost
+	}
 	if isUDP(rule) {
 		conn, err := listenUDP(rule.Listen)
 		if err != nil {
@@ -249,6 +258,10 @@ func (m *Manager) handleConn(ctx context.Context, state *listenerState, inbound 
 		m.handleTunnelConn(ctx, state, sourceConn, sourceAddr)
 		return
 	}
+	if isGost(rule) {
+		m.handleGostConn(ctx, state, sourceConn, sourceAddr)
+		return
+	}
 
 	outbound, err := net.DialTimeout("tcp", rule.Target, 10*time.Second)
 	if err != nil {
@@ -263,6 +276,33 @@ func (m *Manager) handleConn(ctx context.Context, state *listenerState, inbound 
 			return
 		}
 	}
+
+	if tcpAddr, ok := sourceAddr.(*net.TCPAddr); ok {
+		m.recordOnlineAddr(ctx, rule, tcpAddr)
+	}
+
+	errCh := make(chan copyResult, 2)
+	go proxyCopy(errCh, outbound, sourceConn)
+	go proxyCopy(errCh, sourceConn, outbound)
+	first := <-errCh
+	_ = outbound.Close()
+	_ = sourceConn.Close()
+	second := <-errCh
+	atomic.AddInt64(&state.stats.bytes, first.bytes+second.bytes)
+}
+
+func (m *Manager) handleGostConn(ctx context.Context, state *listenerState, sourceConn net.Conn, sourceAddr net.Addr) {
+	rule := state.rule
+	if state.gost == nil || !state.gost.running() {
+		m.logger.Warn("gost relay process unavailable", "rule", rule.Name)
+		return
+	}
+	outbound, err := net.DialTimeout("tcp", state.gost.localAddr, 10*time.Second)
+	if err != nil {
+		m.logger.Warn("gost relay dial failed", "rule", rule.Name, "local", state.gost.localAddr, "error", err)
+		return
+	}
+	defer outbound.Close()
 
 	if tcpAddr, ok := sourceAddr.(*net.TCPAddr); ok {
 		m.recordOnlineAddr(ctx, rule, tcpAddr)
@@ -335,10 +375,11 @@ func runnable(rule domain.RelayRule) bool {
 		rule.Status == domain.RuleStatusRunning &&
 		((rule.Inbound == domain.RelayProtocolDirectTCP && rule.Outbound == domain.RelayProtocolDirectTCP) ||
 			(rule.Inbound == domain.RelayProtocolDirectUDP && rule.Outbound == domain.RelayProtocolDirectUDP) ||
-			isTunnel(rule)) &&
+			isTunnel(rule) ||
+			isGost(rule)) &&
 		rule.Listen != "" &&
 		rule.Target != "" &&
-		(!isTunnel(rule) || rule.TunnelEndpoint != "")
+		((!isTunnel(rule) && !isGost(rule)) || rule.TunnelEndpoint != "")
 }
 
 func isUDP(rule domain.RelayRule) bool {
@@ -351,6 +392,23 @@ func isTCP(rule domain.RelayRule) bool {
 
 func isTunnel(rule domain.RelayRule) bool {
 	return tunnelProtocol(rule.Inbound) && rule.Inbound == rule.Outbound
+}
+
+func isGost(rule domain.RelayRule) bool {
+	return gostProtocol(rule.Inbound) && rule.Inbound == rule.Outbound
+}
+
+func gostStopped(process *gostProcess) bool {
+	return process != nil && !process.running()
+}
+
+func gostProtocol(protocol domain.RelayProtocol) bool {
+	switch protocol {
+	case domain.RelayProtocolGOSTTCP, domain.RelayProtocolGOSTWS, domain.RelayProtocolGOSTWSS:
+		return true
+	default:
+		return false
+	}
 }
 
 func tunnelProtocol(protocol domain.RelayProtocol) bool {

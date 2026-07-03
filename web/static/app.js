@@ -239,6 +239,9 @@ function protocolToRelayProtocol(protocol) {
   if (normalized === "TCP+TLS") return "tcp_tls_tunnel";
   if (normalized === "WS") return "ws";
   if (normalized === "WS+TLS") return "ws_tls";
+  if (normalized === "GOSTTCP") return "gost_tcp";
+  if (normalized === "GOSTWS") return "gost_ws";
+  if (normalized === "GOSTWSS" || normalized === "GOSTWS+TLS") return "gost_wss";
   if (normalized === "SOCKS5") return "socks5";
   return "tcp_tunnel";
 }

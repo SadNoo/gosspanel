@@ -28,6 +28,7 @@ type TunnelManager struct {
 type tunnelState struct {
 	rule     domain.RelayRule
 	listener net.Listener
+	gost     *gostProcess
 	cancel   context.CancelFunc
 }
 
@@ -58,7 +59,7 @@ func (m *TunnelManager) SyncRules(rules []domain.RelayRule) error {
 
 	for id, state := range m.running {
 		rule, ok := want[id]
-		if !ok || shouldRestartTunnel(rule, state.rule) {
+		if !ok || shouldRestartTunnel(rule, state.rule) || gostStopped(state.gost) {
 			state.close()
 			delete(m.running, id)
 		}
@@ -89,11 +90,20 @@ func (m *TunnelManager) Close() {
 }
 
 func (m *TunnelManager) startRule(rule domain.RelayRule) (*tunnelState, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if isGost(rule) {
+		gost, err := startGostClient(ctx, rule, m.logger)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		return &tunnelState{rule: rule, gost: gost, cancel: cancel}, nil
+	}
 	listener, err := listenTunnelTransport(rule)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	state := &tunnelState{rule: rule, listener: listener, cancel: cancel}
 	go m.serve(ctx, state)
 	return state, nil
@@ -101,7 +111,9 @@ func (m *TunnelManager) startRule(rule domain.RelayRule) (*tunnelState, error) {
 
 func (s *tunnelState) close() {
 	s.cancel()
-	_ = s.listener.Close()
+	if s.listener != nil {
+		_ = s.listener.Close()
+	}
 }
 
 func (m *TunnelManager) serve(ctx context.Context, state *tunnelState) {
@@ -213,7 +225,7 @@ func readTunnelRequest(r io.Reader) (tunnelRequest, error) {
 func runnableTunnel(rule domain.RelayRule) bool {
 	return rule.Enabled &&
 		rule.Status == domain.RuleStatusRunning &&
-		tunnelProtocol(rule.Inbound) &&
+		(tunnelProtocol(rule.Inbound) || gostProtocol(rule.Inbound)) &&
 		rule.Inbound == rule.Outbound &&
 		strings.TrimSpace(rule.TunnelEndpoint) != "" &&
 		strings.TrimSpace(rule.Target) != ""
@@ -241,5 +253,7 @@ func parseTCPAddr(value string) *net.TCPAddr {
 func shouldRestartTunnel(next domain.RelayRule, current domain.RelayRule) bool {
 	return next.TunnelEndpoint != current.TunnelEndpoint ||
 		next.Target != current.Target ||
+		next.Inbound != current.Inbound ||
+		next.Outbound != current.Outbound ||
 		!reflect.DeepEqual(next.ProxyProtocol, current.ProxyProtocol)
 }

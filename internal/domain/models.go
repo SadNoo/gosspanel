@@ -49,6 +49,9 @@ const (
 	RelayProtocolWSS       RelayProtocol = "ws_tls"
 	RelayProtocolTunnelTCP RelayProtocol = "tcp_tunnel"
 	RelayProtocolTunnelTLS RelayProtocol = "tcp_tls_tunnel"
+	RelayProtocolGOSTTCP   RelayProtocol = "gost_tcp"
+	RelayProtocolGOSTWS    RelayProtocol = "gost_ws"
+	RelayProtocolGOSTWSS   RelayProtocol = "gost_wss"
 	RelayProtocolSOCKS5    RelayProtocol = "socks5"
 )
 

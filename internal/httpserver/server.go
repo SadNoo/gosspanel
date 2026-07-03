@@ -426,11 +426,20 @@ func decodeRuleInput(w http.ResponseWriter, r *http.Request) (domain.RuleInput, 
 		writeError(w, http.StatusBadRequest, errors.New("name, relayNodeId, listen and target are required"))
 		return input, false
 	}
-	if input.Inbound == domain.RelayProtocolTunnelTCP && strings.TrimSpace(input.TunnelEndpoint) == "" {
-		writeError(w, http.StatusBadRequest, errors.New("tunnelEndpoint is required for tcp tunnel"))
+	if isTunnelProtocol(input.Inbound) && strings.TrimSpace(input.TunnelEndpoint) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("tunnelEndpoint is required for tunnel protocol"))
 		return input, false
 	}
 	return input, true
+}
+
+func isTunnelProtocol(protocol domain.RelayProtocol) bool {
+	switch protocol {
+	case domain.RelayProtocolTunnelTCP, domain.RelayProtocolTunnelTLS, domain.RelayProtocolTLS, domain.RelayProtocolWS, domain.RelayProtocolWSS:
+		return true
+	default:
+		return false
+	}
 }
 
 func writeResult(w http.ResponseWriter, value any, err error) {

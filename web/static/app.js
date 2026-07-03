@@ -236,7 +236,7 @@ function protocolToRelayProtocol(protocol) {
   if (normalized === "TCP") return "direct_tcp";
   if (normalized === "UDP") return "direct_udp";
   if (normalized === "TCPTUNNEL" || normalized === "TCP隧道") return "tcp_tunnel";
-  if (normalized === "TCP+TLS") return "tls";
+  if (normalized === "TCP+TLS") return "tcp_tls_tunnel";
   if (normalized === "WS") return "ws";
   if (normalized === "WS+TLS") return "ws_tls";
   if (normalized === "SOCKS5") return "socks5";

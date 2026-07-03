@@ -89,7 +89,7 @@ func (m *TunnelManager) Close() {
 }
 
 func (m *TunnelManager) startRule(rule domain.RelayRule) (*tunnelState, error) {
-	listener, err := net.Listen("tcp", tunnelListenAddr(rule.TunnelEndpoint))
+	listener, err := listenTunnelTransport(rule)
 	if err != nil {
 		return nil, err
 	}
@@ -122,8 +122,13 @@ func (m *TunnelManager) serve(ctx context.Context, state *tunnelState) {
 
 func (m *TunnelManager) handleConn(ctx context.Context, rule domain.RelayRule, conn net.Conn) {
 	defer conn.Close()
+	tunnelConn, err := acceptTunnelTransport(conn, rule)
+	if err != nil {
+		m.logger.Warn("client tunnel transport failed", "rule", rule.Name, "error", err)
+		return
+	}
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	req, err := readTunnelRequest(conn)
+	req, err := readTunnelRequest(tunnelConn)
 	if err != nil {
 		m.logger.Warn("client tunnel header failed", "rule", rule.Name, "error", err)
 		return
@@ -150,11 +155,11 @@ func (m *TunnelManager) handleConn(ctx context.Context, rule domain.RelayRule, c
 	}
 
 	errCh := make(chan copyResult, 2)
-	go proxyCopy(errCh, outbound, conn)
-	go proxyCopy(errCh, conn, outbound)
+	go proxyCopy(errCh, outbound, tunnelConn)
+	go proxyCopy(errCh, tunnelConn, outbound)
 	first := <-errCh
 	_ = outbound.Close()
-	_ = conn.Close()
+	_ = tunnelConn.Close()
 	second := <-errCh
 	if first.err != nil && !errors.Is(first.err, io.ErrClosedPipe) {
 		m.logger.Debug("client tunnel copy finished", "rule", rule.Name, "error", first.err)
@@ -208,8 +213,8 @@ func readTunnelRequest(r io.Reader) (tunnelRequest, error) {
 func runnableTunnel(rule domain.RelayRule) bool {
 	return rule.Enabled &&
 		rule.Status == domain.RuleStatusRunning &&
-		rule.Inbound == domain.RelayProtocolTunnelTCP &&
-		rule.Outbound == domain.RelayProtocolTunnelTCP &&
+		tunnelProtocol(rule.Inbound) &&
+		rule.Inbound == rule.Outbound &&
 		strings.TrimSpace(rule.TunnelEndpoint) != "" &&
 		strings.TrimSpace(rule.Target) != ""
 }

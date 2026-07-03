@@ -245,7 +245,7 @@ func (m *Manager) handleConn(ctx context.Context, state *listenerState, inbound 
 		sourceAddr = &net.TCPAddr{IP: info.srcIP, Port: info.srcPort}
 	}
 
-	if isTCPTunnel(rule) {
+	if isTunnel(rule) {
 		m.handleTunnelConn(ctx, state, sourceConn, sourceAddr)
 		return
 	}
@@ -280,7 +280,7 @@ func (m *Manager) handleConn(ctx context.Context, state *listenerState, inbound 
 
 func (m *Manager) handleTunnelConn(ctx context.Context, state *listenerState, sourceConn net.Conn, sourceAddr net.Addr) {
 	rule := state.rule
-	outbound, err := net.DialTimeout("tcp", rule.TunnelEndpoint, 10*time.Second)
+	outbound, err := dialTunnelTransport(rule, 10*time.Second)
 	if err != nil {
 		m.logger.Warn("relay tunnel dial failed", "rule", rule.Name, "endpoint", rule.TunnelEndpoint, "error", err)
 		return
@@ -335,10 +335,10 @@ func runnable(rule domain.RelayRule) bool {
 		rule.Status == domain.RuleStatusRunning &&
 		((rule.Inbound == domain.RelayProtocolDirectTCP && rule.Outbound == domain.RelayProtocolDirectTCP) ||
 			(rule.Inbound == domain.RelayProtocolDirectUDP && rule.Outbound == domain.RelayProtocolDirectUDP) ||
-			(rule.Inbound == domain.RelayProtocolTunnelTCP && rule.Outbound == domain.RelayProtocolTunnelTCP)) &&
+			isTunnel(rule)) &&
 		rule.Listen != "" &&
 		rule.Target != "" &&
-		(!isTCPTunnel(rule) || rule.TunnelEndpoint != "")
+		(!isTunnel(rule) || rule.TunnelEndpoint != "")
 }
 
 func isUDP(rule domain.RelayRule) bool {
@@ -349,8 +349,17 @@ func isTCP(rule domain.RelayRule) bool {
 	return rule.Inbound == domain.RelayProtocolDirectTCP && rule.Outbound == domain.RelayProtocolDirectTCP
 }
 
-func isTCPTunnel(rule domain.RelayRule) bool {
-	return rule.Inbound == domain.RelayProtocolTunnelTCP && rule.Outbound == domain.RelayProtocolTunnelTCP
+func isTunnel(rule domain.RelayRule) bool {
+	return tunnelProtocol(rule.Inbound) && rule.Inbound == rule.Outbound
+}
+
+func tunnelProtocol(protocol domain.RelayProtocol) bool {
+	switch protocol {
+	case domain.RelayProtocolTunnelTCP, domain.RelayProtocolTunnelTLS, domain.RelayProtocolTLS, domain.RelayProtocolWS, domain.RelayProtocolWSS:
+		return true
+	default:
+		return false
+	}
 }
 
 func listenUDP(listen string) (*net.UDPConn, error) {

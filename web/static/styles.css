@@ -976,6 +976,13 @@ input[type="text"] {
   margin-top: 18px;
 }
 
+.settings-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .settings-message {
   min-height: 20px;
   color: var(--muted);
@@ -1101,6 +1108,10 @@ input[type="text"] {
   .settings-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .settings-buttons {
+    justify-content: stretch;
   }
 
   .health {

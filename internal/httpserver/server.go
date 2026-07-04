@@ -177,6 +177,7 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	panelURL := externalPanelURL(r)
 	writeJSON(w, http.StatusOK, domain.AgentBootstrapCommands{
 		PanelURL: panelURL,
+		Panel:    panelInstallCommand(),
 		Relay:    agentInstallCommand(panelURL, s.cfg.AgentToken, domain.NodeRoleRelay),
 		Client:   agentInstallCommand(panelURL, s.cfg.AgentToken, domain.NodeRoleClient),
 	})
@@ -692,45 +693,31 @@ func externalPanelURL(r *http.Request) string {
 }
 
 func agentInstallCommand(panelURL string, token string, role domain.NodeRole) string {
-	panelURL = strings.ReplaceAll(panelURL, `"`, `\"`)
-	serviceName := "goss-client-agent"
 	nodeSuffix := "client"
 	displayName := "Goss Client"
 	region := "Client"
-	extra := ""
 	if role == domain.NodeRoleRelay {
-		serviceName = "goss-relay-agent"
 		nodeSuffix = "relay"
 		displayName = "Goss Relay"
 		region = "Relay"
-	} else {
-		extra = " -report-ip \"$(hostname -I 2>/dev/null | awk '{print $1}')\""
 	}
-	return fmt.Sprintf(`set -e
-command -v goss >/dev/null || { echo "请先将 goss 二进制安装到 /usr/local/bin/goss"; exit 1; }
-mkdir -p /etc/goss
-cat > /etc/goss/agent.env <<'EOF'
-GOSS_AGENT_TOKEN=%s
-EOF
-chmod 600 /etc/goss/agent.env
-cat > /etc/systemd/system/%s.service <<'EOF'
-[Unit]
-Description=%s
-After=network-online.target
-Wants=network-online.target
+	return fmt.Sprintf(
+		"curl -fsSL https://raw.githubusercontent.com/SadNoo/gosspanel/main/scripts/install-agent.sh | bash -s -- --role %s --server %s --token %s --node-id \"$(hostname)-%s\" --name \"%s $(hostname)\" --region %s --interval 5s",
+		role,
+		shellQuote(panelURL),
+		shellQuote(token),
+		nodeSuffix,
+		displayName,
+		shellQuote(region),
+	)
+}
 
-[Service]
-EnvironmentFile=/etc/goss/agent.env
-ExecStart=/bin/sh -c 'exec /usr/local/bin/goss agent -server "%s" -token "$GOSS_AGENT_TOKEN" -role %s -node-id "$(hostname)-%s" -name "%s $(hostname)" -region "%s" -interval 5s%s'
-Restart=always
-RestartSec=3
+func panelInstallCommand() string {
+	return "curl -fsSL https://raw.githubusercontent.com/SadNoo/gosspanel/main/scripts/install-panel.sh | bash"
+}
 
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable --now %s.service
-systemctl status %s.service --no-pager -l`, token, serviceName, displayName, panelURL, role, nodeSuffix, displayName, region, extra, serviceName, serviceName)
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 const loginHTML = `<!doctype html>

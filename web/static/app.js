@@ -55,7 +55,7 @@ const ruleTable = document.querySelector("#ruleTable");
 const proxyProtocolSwitch = document.querySelector("#proxyProtocolSwitch");
 const commandModal = document.querySelector("#commandModal");
 const commandText = document.querySelector("#commandText");
-let bootstrapCommands = { relay: "", client: "" };
+let bootstrapCommands = { panel: "", relay: "", client: "" };
 let editingRuleId = "";
 let proxyVersion = "v2";
 
@@ -586,6 +586,13 @@ function closeModal() {
 }
 
 function openCommandModal(role) {
+  if (role === "panel") {
+    document.querySelector("#commandModalTitle").textContent = "面板安装命令";
+    commandText.textContent = bootstrapCommands.panel || "";
+    commandModal.classList.add("open");
+    commandModal.setAttribute("aria-hidden", "false");
+    return;
+  }
   const isRelay = role === "relay";
   document.querySelector("#commandModalTitle").textContent = isRelay ? "中转机器接入命令" : "客户端机器接入命令";
   commandText.textContent = isRelay ? bootstrapCommands.relay || "" : bootstrapCommands.client || "";
@@ -863,6 +870,7 @@ if (ruleImportFile) {
 document.querySelector("#viewEventsButton").addEventListener("click", () => showToast("事件列表已按最新时间展示"));
 document.querySelector("#addClientButton").addEventListener("click", () => openCommandModal("client"));
 document.querySelector("#addRelayButton").addEventListener("click", () => openCommandModal("relay"));
+document.querySelector("#showPanelInstallButton").addEventListener("click", () => openCommandModal("panel"));
 document.querySelector("#addCertButton").addEventListener("click", () => showToast("证书申请和部署功能将在 TLS/WSS 阶段接入"));
 
 document.querySelector("#saveAccountSettings").addEventListener("click", async () => {

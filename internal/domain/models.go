@@ -231,6 +231,7 @@ type RuleMetric struct {
 
 type AgentBootstrapCommands struct {
 	PanelURL string `json:"panelUrl"`
+	Panel    string `json:"panel"`
 	Relay    string `json:"relay"`
 	Client   string `json:"client"`
 }

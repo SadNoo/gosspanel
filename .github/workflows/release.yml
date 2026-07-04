@@ -37,12 +37,15 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
+          sudo apt-get update
           if [ "$GOARCH" = "arm64" ]; then
-            sudo apt-get update
             sudo apt-get install -y gcc-aarch64-linux-gnu
             export CC=aarch64-linux-gnu-gcc
+          else
+            sudo apt-get install -y gcc
           fi
-          go build -trimpath -ldflags="-s -w" -o goss ./cmd/goss
+          go build -trimpath -tags "netgo osusergo" -ldflags="-s -w -linkmode external -extldflags '-static'" -o goss ./cmd/goss
+          file goss
           tar -czf goss_${GOOS}_${GOARCH}.tar.gz goss scripts/install-panel.sh scripts/install-agent.sh
           sha256sum goss_${GOOS}_${GOARCH}.tar.gz > goss_${GOOS}_${GOARCH}.tar.gz.sha256
       - name: Upload artifact

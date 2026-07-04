@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,14 +18,15 @@ import (
 )
 
 type Config struct {
-	Server   string
-	Token    string
-	NodeID   string
-	Name     string
-	Region   string
-	Role     domain.NodeRole
-	Interval time.Duration
-	ReportIP string
+	Server      string
+	Token       string
+	NodeID      string
+	Name        string
+	Region      string
+	Role        domain.NodeRole
+	Interval    time.Duration
+	ReportIP    string
+	InsecureTLS bool
 }
 
 type panelRecorder struct {
@@ -37,7 +39,7 @@ func Run(ctx context.Context, args []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newHTTPClient(cfg)
 	recorder := panelRecorder{client: client, cfg: cfg}
 	var relayManager *relay.Manager
 	var tunnelManager *relay.TunnelManager
@@ -111,6 +113,7 @@ func parseArgs(args []string) (Config, error) {
 	fs.StringVar(&cfg.Name, "name", hostname, "node display name")
 	fs.StringVar(&cfg.Region, "region", "agent", "node region")
 	fs.StringVar(&cfg.ReportIP, "report-ip", "", "real ip to report to the panel")
+	fs.BoolVar(&cfg.InsecureTLS, "insecure-tls", false, "skip panel TLS certificate verification")
 	fs.Func("role", "machine role: client or relay", func(value string) error {
 		if value == string(domain.NodeRoleRelay) {
 			cfg.Role = domain.NodeRoleRelay
@@ -130,6 +133,16 @@ func parseArgs(args []string) (Config, error) {
 		return cfg, fmt.Errorf("node id is required")
 	}
 	return cfg, nil
+}
+
+func newHTTPClient(cfg Config) *http.Client {
+	transport := http.DefaultTransport
+	if cfg.InsecureTLS {
+		base := http.DefaultTransport.(*http.Transport).Clone()
+		base.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		transport = base
+	}
+	return &http.Client{Timeout: 15 * time.Second, Transport: transport}
 }
 
 func heartbeat(client *http.Client, cfg Config, logger *slog.Logger, metrics []domain.RuleMetric) ([]domain.RelayRule, error) {

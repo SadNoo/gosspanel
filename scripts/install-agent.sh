@@ -17,6 +17,7 @@ REGION=""
 INTERVAL="5s"
 REPORT_IP=""
 INSTALL_GOST=1
+INSECURE_TLS=0
 
 usage() {
   cat <<EOF
@@ -29,6 +30,7 @@ usage() {
   --region REGION    区域名称
   --interval 5s      心跳间隔
   --report-ip IP     client 上报 IP，client 默认自动取本机首个 IP
+  --insecure-tls     跳过面板 TLS 证书校验，仅用于无域名自签 HTTPS 面板
   --no-gost          不安装 GOST
 EOF
 }
@@ -43,6 +45,7 @@ while [ $# -gt 0 ]; do
     --region) REGION="${2:-}"; shift 2 ;;
     --interval) INTERVAL="${2:-}"; shift 2 ;;
     --report-ip) REPORT_IP="${2:-}"; shift 2 ;;
+    --insecure-tls) INSECURE_TLS=1; shift ;;
     --no-gost) INSTALL_GOST=0; shift ;;
     -h | --help) usage; exit 0 ;;
     *) echo "未知参数: $1"; usage; exit 1 ;;
@@ -154,8 +157,11 @@ write_service() {
   local service extra
   service="goss-${ROLE}-agent"
   extra=""
+  if [ "$INSECURE_TLS" = "1" ]; then
+    extra="${extra} -insecure-tls"
+  fi
   if [ "$ROLE" = "client" ] && [ -n "$REPORT_IP" ]; then
-    extra=" -report-ip ${REPORT_IP}"
+    extra="${extra} -report-ip ${REPORT_IP}"
   fi
   cat >"/etc/systemd/system/${service}.service" <<EOF
 [Unit]

@@ -10,7 +10,9 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -702,14 +704,27 @@ func agentInstallCommand(panelURL string, token string, role domain.NodeRole) st
 		region = "Relay"
 	}
 	return fmt.Sprintf(
-		"curl -fsSL https://raw.githubusercontent.com/SadNoo/gosspanel/main/scripts/install-agent.sh | bash -s -- --role %s --server %s --token %s --node-id \"$(hostname)-%s\" --name \"%s $(hostname)\" --region %s --interval 5s",
+		"curl -fsSL https://raw.githubusercontent.com/SadNoo/gosspanel/main/scripts/install-agent.sh | bash -s -- --role %s --server %s --token %s --node-id \"$(hostname)-%s\" --name \"%s $(hostname)\" --region %s --interval 5s%s",
 		role,
 		shellQuote(panelURL),
 		shellQuote(token),
 		nodeSuffix,
 		displayName,
 		shellQuote(region),
+		agentTLSInstallFlag(panelURL),
 	)
+}
+
+func agentTLSInstallFlag(panelURL string) string {
+	parsed, err := url.Parse(panelURL)
+	if err != nil || parsed.Scheme != "https" {
+		return ""
+	}
+	host := parsed.Hostname()
+	if net.ParseIP(host) == nil {
+		return ""
+	}
+	return " --insecure-tls"
 }
 
 func panelInstallCommand() string {

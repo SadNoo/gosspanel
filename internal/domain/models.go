@@ -105,6 +105,37 @@ type RelayRule struct {
 	Enabled        bool                `json:"enabled"`
 }
 
+type RuleExport struct {
+	Version    int         `json:"version"`
+	ExportedAt string      `json:"exportedAt"`
+	Count      int         `json:"count"`
+	Rules      []RuleInput `json:"rules"`
+}
+
+type RuleImportRequest struct {
+	Mode   string      `json:"mode"`
+	DryRun bool        `json:"dryRun"`
+	Rules  []RuleInput `json:"rules"`
+}
+
+type RuleImportIssue struct {
+	Index   int    `json:"index"`
+	Name    string `json:"name"`
+	Listen  string `json:"listen"`
+	Message string `json:"message"`
+}
+
+type RuleImportResult struct {
+	Mode    string            `json:"mode"`
+	DryRun  bool              `json:"dryRun"`
+	Total   int               `json:"total"`
+	Created int               `json:"created"`
+	Updated int               `json:"updated"`
+	Skipped int               `json:"skipped"`
+	Copies  int               `json:"copies"`
+	Issues  []RuleImportIssue `json:"issues"`
+}
+
 type RuleInput struct {
 	Name           string              `json:"name"`
 	RelayNodeID    string              `json:"relayNodeId"`

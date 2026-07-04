@@ -214,6 +214,15 @@ p {
   gap: 10px;
 }
 
+.toolbar {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.file-input {
+  display: none;
+}
+
 .search {
   display: flex;
   align-items: center;

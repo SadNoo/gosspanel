@@ -195,6 +195,14 @@
                 <option value="paused">已暂停</option>
                 <option value="warning">告警</option>
               </select>
+              <select id="ruleImportMode" aria-label="导入冲突处理">
+                <option value="skip">冲突跳过</option>
+                <option value="replace">冲突覆盖</option>
+                <option value="copy">导入副本</option>
+              </select>
+              <input class="file-input" id="ruleImportFile" type="file" accept="application/json,.json">
+              <button class="ghost-button" id="exportRulesButton" type="button">导出规则</button>
+              <button class="ghost-button" id="importRulesButton" type="button">导入规则</button>
               <button class="primary-button" id="openRuleModal2" type="button">
                 <span>＋</span>
                 新建规则

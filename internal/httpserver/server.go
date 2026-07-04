@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -63,6 +64,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/relay-machines", s.requireAuth(s.relayMachines))
 	mux.HandleFunc("GET /api/rules", s.requireAuth(s.rules))
 	mux.HandleFunc("POST /api/rules", s.requireAuth(s.createRule))
+	mux.HandleFunc("GET /api/rules/export", s.requireAuth(s.exportRules))
+	mux.HandleFunc("POST /api/rules/import", s.requireAuth(s.importRules))
 	mux.HandleFunc("GET /api/rules/{id}", s.requireAuth(s.rule))
 	mux.HandleFunc("PUT /api/rules/{id}", s.requireAuth(s.updateRule))
 	mux.HandleFunc("DELETE /api/rules/{id}", s.requireAuth(s.deleteRule))
@@ -216,6 +219,48 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request) {
 	writeResultStatus(w, http.StatusCreated, rule, err)
 }
 
+func (s *Server) exportRules(w http.ResponseWriter, r *http.Request) {
+	rules, err := s.store.Rules(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	items := make([]domain.RuleInput, 0, len(rules))
+	for _, rule := range rules {
+		items = append(items, ruleInputFromRule(rule))
+	}
+	payload := domain.RuleExport{
+		Version:    1,
+		ExportedAt: time.Now().UTC().Format(time.RFC3339),
+		Count:      len(items),
+		Rules:      items,
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="goss-rules-%s.json"`, time.Now().Format("20060102-150405")))
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (s *Server) importRules(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeRuleImportRequest(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.applyRuleImport(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !req.DryRun {
+		_ = s.store.AddEvent(r.Context(), domain.Event{
+			Level: "info",
+			Title: "规则已导入",
+			Body:  fmt.Sprintf("新增 %d，更新 %d，副本 %d，跳过 %d", result.Created, result.Updated, result.Copies, result.Skipped),
+			Time:  time.Now().Format("15:04:05"),
+		})
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 	input, ok := decodeRuleInput(w, r)
 	if !ok {
@@ -234,6 +279,64 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "规则已删除", Body: r.PathValue("id"), Time: time.Now().Format("15:04:05")})
 	}
 	writeResult(w, map[string]string{"status": "deleted"}, err)
+}
+
+func (s *Server) applyRuleImport(ctx context.Context, req domain.RuleImportRequest) (domain.RuleImportResult, error) {
+	mode := normalizeImportMode(req.Mode)
+	result := domain.RuleImportResult{Mode: mode, DryRun: req.DryRun, Total: len(req.Rules)}
+	existing, err := s.store.Rules(ctx)
+	if err != nil {
+		return result, err
+	}
+	byListen := make(map[string]domain.RelayRule, len(existing))
+	for _, rule := range existing {
+		byListen[ruleConflictKey(rule.RelayNodeID, rule.Listen)] = rule
+	}
+	for index, input := range req.Rules {
+		input = normalizeImportedRule(input)
+		if err := validateRuleInput(input); err != nil {
+			result.Issues = append(result.Issues, domain.RuleImportIssue{Index: index, Name: input.Name, Listen: input.Listen, Message: err.Error()})
+			result.Skipped++
+			continue
+		}
+		key := ruleConflictKey(input.RelayNodeID, input.Listen)
+		current, conflict := byListen[key]
+		switch {
+		case !conflict:
+			if !req.DryRun {
+				created, err := s.store.CreateRule(ctx, input)
+				if err != nil {
+					return result, err
+				}
+				byListen[key] = created
+			}
+			result.Created++
+		case mode == "replace":
+			if !req.DryRun {
+				updated, err := s.store.UpdateRule(ctx, current.ID, input)
+				if err != nil {
+					return result, err
+				}
+				byListen[key] = updated
+			}
+			result.Updated++
+		case mode == "copy":
+			input.Name = input.Name + "（导入副本）"
+			input.Status = domain.RuleStatusPaused
+			input.Enabled = false
+			if !req.DryRun {
+				if _, err := s.store.CreateRule(ctx, input); err != nil {
+					return result, err
+				}
+			}
+			result.Copies++
+			result.Issues = append(result.Issues, domain.RuleImportIssue{Index: index, Name: input.Name, Listen: input.Listen, Message: "监听地址已存在，已作为停用副本导入"})
+		default:
+			result.Skipped++
+			result.Issues = append(result.Issues, domain.RuleImportIssue{Index: index, Name: input.Name, Listen: input.Listen, Message: "监听地址已存在，已跳过"})
+		}
+	}
+	return result, nil
 }
 
 func (s *Server) onlineIPs(w http.ResponseWriter, r *http.Request) {
@@ -416,21 +519,113 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 	})
 }
 
+func decodeRuleImportRequest(w http.ResponseWriter, r *http.Request) (domain.RuleImportRequest, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
+	if err != nil {
+		return domain.RuleImportRequest{}, err
+	}
+	var req domain.RuleImportRequest
+	if err := json.Unmarshal(body, &req); err == nil && len(req.Rules) > 0 {
+		req.Mode = normalizeImportMode(req.Mode)
+		return req, nil
+	}
+	var export domain.RuleExport
+	if err := json.Unmarshal(body, &export); err == nil && len(export.Rules) > 0 {
+		return domain.RuleImportRequest{Mode: "skip", Rules: export.Rules}, nil
+	}
+	var rules []domain.RuleInput
+	if err := json.Unmarshal(body, &rules); err == nil && len(rules) > 0 {
+		return domain.RuleImportRequest{Mode: "skip", Rules: rules}, nil
+	}
+	return domain.RuleImportRequest{}, errors.New("rules import payload is empty or invalid")
+}
+
 func decodeRuleInput(w http.ResponseWriter, r *http.Request) (domain.RuleInput, bool) {
 	var input domain.RuleInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return input, false
 	}
-	if input.Name == "" || input.RelayNodeID == "" || input.Listen == "" || input.Target == "" {
-		writeError(w, http.StatusBadRequest, errors.New("name, relayNodeId, listen and target are required"))
-		return input, false
-	}
-	if (isTunnelProtocol(input.Inbound) || isGostProtocol(input.Inbound)) && strings.TrimSpace(input.TunnelEndpoint) == "" {
-		writeError(w, http.StatusBadRequest, errors.New("tunnelEndpoint is required for tunnel protocol"))
+	input = normalizeImportedRule(input)
+	if err := validateRuleInput(input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return input, false
 	}
 	return input, true
+}
+
+func validateRuleInput(input domain.RuleInput) error {
+	if input.Name == "" || input.RelayNodeID == "" || input.Listen == "" || input.Target == "" {
+		return errors.New("name, relayNodeId, listen and target are required")
+	}
+	if (isTunnelProtocol(input.Inbound) || isGostProtocol(input.Inbound)) && strings.TrimSpace(input.TunnelEndpoint) == "" {
+		return errors.New("tunnelEndpoint is required for tunnel protocol")
+	}
+	return nil
+}
+
+func normalizeImportedRule(input domain.RuleInput) domain.RuleInput {
+	input.Name = strings.TrimSpace(input.Name)
+	input.RelayNodeID = strings.TrimSpace(input.RelayNodeID)
+	input.ClientNodeID = strings.TrimSpace(input.ClientNodeID)
+	input.Listen = strings.TrimSpace(input.Listen)
+	input.Target = strings.TrimSpace(input.Target)
+	input.TunnelEndpoint = strings.TrimSpace(input.TunnelEndpoint)
+	if input.Protocol == "" {
+		input.Protocol = string(input.Inbound)
+	}
+	if input.Inbound == "" {
+		input.Inbound = domain.RelayProtocolDirectTCP
+	}
+	if input.Outbound == "" {
+		input.Outbound = input.Inbound
+	}
+	if input.Strategy == "" {
+		input.Strategy = domain.StrategySingle
+	}
+	if input.ProxyProtocol.Mode == "" {
+		input.ProxyProtocol.Mode = domain.ProxyProtocolOff
+	}
+	if input.ProxyProtocol.Version == "" {
+		input.ProxyProtocol.Version = domain.ProxyProtocolVersion2
+	}
+	if input.Status == "" {
+		input.Status = domain.RuleStatusRunning
+	}
+	return input
+}
+
+func ruleInputFromRule(rule domain.RelayRule) domain.RuleInput {
+	return domain.RuleInput{
+		Name:           rule.Name,
+		RelayNodeID:    rule.RelayNodeID,
+		ClientNodeID:   rule.ClientNodeID,
+		Listen:         rule.Listen,
+		Target:         rule.Target,
+		TunnelEndpoint: rule.TunnelEndpoint,
+		Protocol:       rule.Protocol,
+		Inbound:        rule.Inbound,
+		Outbound:       rule.Outbound,
+		Strategy:       rule.Strategy,
+		ProxyProtocol:  rule.ProxyProtocol,
+		Status:         rule.Status,
+		Enabled:        rule.Enabled,
+	}
+}
+
+func normalizeImportMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "replace":
+		return "replace"
+	case "copy":
+		return "copy"
+	default:
+		return "skip"
+	}
+}
+
+func ruleConflictKey(relayNodeID string, listen string) string {
+	return strings.TrimSpace(relayNodeID) + "\x00" + strings.TrimSpace(listen)
 }
 
 func isTunnelProtocol(protocol domain.RelayProtocol) bool {

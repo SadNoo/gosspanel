@@ -614,6 +614,9 @@ func normalizeRuleInput(id string, input domain.RuleInput) domain.RelayRule {
 	if input.ProxyProtocol.Version == "" {
 		input.ProxyProtocol.Version = domain.ProxyProtocolVersion2
 	}
+	if input.ProxyProtocol.Mode == "" {
+		input.ProxyProtocol.Mode = domain.ProxyProtocolOff
+	}
 	if input.Status == "" {
 		input.Status = domain.RuleStatusRunning
 	}

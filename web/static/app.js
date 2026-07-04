@@ -47,6 +47,8 @@ const navButtons = document.querySelectorAll("[data-view]");
 const views = document.querySelectorAll(".view");
 const globalSearch = document.querySelector("#globalSearch");
 const ruleStatusFilter = document.querySelector("#ruleStatusFilter");
+const ruleImportMode = document.querySelector("#ruleImportMode");
+const ruleImportFile = document.querySelector("#ruleImportFile");
 const ruleModal = document.querySelector("#ruleModal");
 const settingsMessage = document.querySelector("#settingsMessage");
 const ruleTable = document.querySelector("#ruleTable");
@@ -715,6 +717,60 @@ function exportOnlineIPs() {
   showToast("在线 IP 已导出", "success");
 }
 
+function downloadJSON(filename, value) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportRules() {
+  const response = await fetch("/api/rules/export");
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(error.error || response.statusText);
+  }
+  const payload = await response.json();
+  downloadJSON(`goss-rules-${Date.now()}.json`, payload);
+  showToast(`已导出 ${payload.count || 0} 条规则`, "success");
+}
+
+function normalizeImportFilePayload(value) {
+  if (Array.isArray(value)) {
+    return { rules: value };
+  }
+  if (value && Array.isArray(value.rules)) {
+    return { ...value, rules: value.rules };
+  }
+  throw new Error("导入文件格式不正确");
+}
+
+async function importRulesFromFile(file) {
+  const text = await file.text();
+  const parsed = normalizeImportFilePayload(JSON.parse(text));
+  const mode = ruleImportMode ? ruleImportMode.value : "skip";
+  const confirmed = window.confirm(`准备导入 ${parsed.rules.length} 条规则，冲突处理为「${ruleImportMode?.selectedOptions[0]?.textContent || "冲突跳过"}」。继续？`);
+  if (!confirmed) return;
+  const result = await apiFetch("/api/rules/import", {
+    method: "POST",
+    body: JSON.stringify({
+      mode,
+      rules: parsed.rules
+    })
+  });
+  await refreshData(`导入完成：新增 ${result.created}，更新 ${result.updated}，副本 ${result.copies}，跳过 ${result.skipped}`);
+  if (result.issues?.length) {
+    console.table(result.issues);
+  }
+}
+
 navButtons.forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
 });
@@ -789,6 +845,21 @@ if (ruleTable) {
 }
 
 document.querySelector("#exportIpsButton").addEventListener("click", exportOnlineIPs);
+document.querySelector("#exportRulesButton").addEventListener("click", () => {
+  exportRules().catch((error) => showToast(error.message, "error"));
+});
+document.querySelector("#importRulesButton").addEventListener("click", () => {
+  if (!ruleImportFile) return;
+  ruleImportFile.value = "";
+  ruleImportFile.click();
+});
+if (ruleImportFile) {
+  ruleImportFile.addEventListener("change", () => {
+    const file = ruleImportFile.files?.[0];
+    if (!file) return;
+    importRulesFromFile(file).catch((error) => showToast(error.message, "error"));
+  });
+}
 document.querySelector("#viewEventsButton").addEventListener("click", () => showToast("事件列表已按最新时间展示"));
 document.querySelector("#addClientButton").addEventListener("click", () => openCommandModal("client"));
 document.querySelector("#addRelayButton").addEventListener("click", () => openCommandModal("relay"));

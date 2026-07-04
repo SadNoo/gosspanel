@@ -444,12 +444,29 @@ p {
   font-weight: 800;
 }
 
+.node-dot strong,
+.node-dot small {
+  display: block;
+}
+
+.node-dot small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .node-dot.online {
   color: var(--green);
 }
 
 .node-dot.warning {
   color: var(--amber);
+}
+
+.node-dot.offline {
+  color: var(--muted);
+  background: #f1f5f9;
 }
 
 .policy-core {
@@ -613,6 +630,11 @@ tr:last-child td {
 .status.paused {
   color: #475569;
   background: #e2e8f0;
+}
+
+.status.offline {
+  color: #475569;
+  background: #f1f5f9;
 }
 
 .protocol {
@@ -875,6 +897,16 @@ input[type="text"] {
 
 .command-modal {
   width: min(920px, 100%);
+}
+
+.event-modal {
+  width: min(760px, 100%);
+}
+
+.modal-event-list {
+  max-height: min(58vh, 560px);
+  overflow: auto;
+  padding-right: 6px;
 }
 
 .command-block {

@@ -20,7 +20,7 @@ type Store interface {
 	UpdateRuleMetrics(context.Context, []domain.RuleMetric) error
 	DeleteRule(context.Context, string) error
 	RecordOnlineIP(context.Context, domain.OnlineIP) error
-	OnlineIPs(context.Context) ([]domain.OnlineIP, error)
+	OnlineIPs(context.Context, string) ([]domain.OnlineIP, error)
 	Certificates(context.Context) ([]domain.Certificate, error)
 	Events(context.Context) ([]domain.Event, error)
 	AddEvent(context.Context, domain.Event) error

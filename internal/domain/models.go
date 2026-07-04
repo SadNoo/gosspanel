@@ -6,6 +6,7 @@ const (
 	NodeStatusRunning NodeStatus = "running"
 	NodeStatusWarning NodeStatus = "warning"
 	NodeStatusPaused  NodeStatus = "paused"
+	NodeStatusOffline NodeStatus = "offline"
 )
 
 type NodeRole string
@@ -230,8 +231,10 @@ type RuleMetric struct {
 }
 
 type AgentBootstrapCommands struct {
-	PanelURL string `json:"panelUrl"`
-	Panel    string `json:"panel"`
-	Relay    string `json:"relay"`
-	Client   string `json:"client"`
+	Panel           string `json:"panel"`
+	PanelHTTPS      string `json:"panelHttps"`
+	PanelHTTPSLocal string `json:"panelHttpsLocal"`
+	PanelURL        string `json:"panelUrl"`
+	Relay           string `json:"relay"`
+	Client          string `json:"client"`
 }

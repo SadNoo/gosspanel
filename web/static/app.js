@@ -18,7 +18,8 @@ let accountSettings = {
 const statusText = {
   running: "运行中",
   warning: "告警",
-  paused: "已暂停"
+  paused: "已暂停",
+  offline: "离线"
 };
 
 const strategyText = {
@@ -47,17 +48,20 @@ const navButtons = document.querySelectorAll("[data-view]");
 const views = document.querySelectorAll(".view");
 const globalSearch = document.querySelector("#globalSearch");
 const ruleStatusFilter = document.querySelector("#ruleStatusFilter");
+const ipRangeFilter = document.querySelector("#ipRangeFilter");
 const ruleImportMode = document.querySelector("#ruleImportMode");
 const ruleImportFile = document.querySelector("#ruleImportFile");
 const ruleModal = document.querySelector("#ruleModal");
+const eventModal = document.querySelector("#eventModal");
 const settingsMessage = document.querySelector("#settingsMessage");
 const ruleTable = document.querySelector("#ruleTable");
 const proxyProtocolSwitch = document.querySelector("#proxyProtocolSwitch");
 const commandModal = document.querySelector("#commandModal");
 const commandText = document.querySelector("#commandText");
-let bootstrapCommands = { panel: "", relay: "", client: "" };
+let bootstrapCommands = { panel: "", panelHttps: "", panelHttpsLocal: "", relay: "", client: "" };
 let editingRuleId = "";
 let proxyVersion = "v2";
+let topologyMode = "latency";
 
 function setView(viewId) {
   navButtons.forEach((button) => {
@@ -69,7 +73,7 @@ function setView(viewId) {
 }
 
 function statusBadge(status) {
-  return `<span class="status ${status}">${statusText[status]}</span>`;
+  return `<span class="status ${status}">${statusText[status] || status || "未知"}</span>`;
 }
 
 function strategyLabel(strategy) {
@@ -126,6 +130,27 @@ function renderEvents() {
     .join("");
 }
 
+function renderEventModalList() {
+  const list = document.querySelector("#eventModalList");
+  if (!list) return;
+  list.innerHTML = events.length
+    ? events
+      .map(
+        (event) => `
+          <div class="event-item">
+            <span class="event-dot ${event.tone === "warn" ? "warn" : event.tone === "info" ? "info" : ""}"></span>
+            <div>
+              <strong>${event.title}</strong>
+              <span>${event.text}</span>
+            </div>
+            <span class="event-time">${event.time}</span>
+          </div>
+        `
+      )
+      .join("")
+    : emptyState("暂无事件");
+}
+
 function renderMetrics() {
   document.querySelector("#metricOnlineNodes").textContent = overviewMetrics.onlineNodes;
   document.querySelector("#metricActiveConnections").textContent = Number(overviewMetrics.activeConnections || 0).toLocaleString();
@@ -155,6 +180,10 @@ function renderTopology() {
   const relays = relayMachines.slice(0, 4);
   const clients = nodes.slice(0, 4);
   const strategies = [...new Set(rules.filter((rule) => rule.status === "running").map((rule) => rule.strategy || "single"))].slice(0, 3);
+  const metricLabel = topologyMode === "traffic" ? "流量" : "延迟";
+  const nodeMetric = (node) => topologyMode === "traffic" ? node.traffic || "0 B" : node.latency || "-";
+  const nodeClass = (node) => node.status === "running" ? "online" : node.status === "offline" ? "offline" : "warning";
+  const nodeDot = (node) => `<div class="node-dot ${nodeClass(node)}"><strong>${shortName(node.name)}</strong><small>${metricLabel} ${nodeMetric(node)}</small></div>`;
   if (!relays.length && !clients.length && !rules.length) {
     graph.innerHTML = emptyState("暂无节点和规则数据");
     return;
@@ -164,7 +193,7 @@ function renderTopology() {
       <span class="topology-label">中转</span>
       ${
         relays.length
-          ? relays.map((node) => `<div class="node-dot ${node.status === "running" ? "online" : "warning"}">${shortName(node.name)}</div>`).join("")
+          ? relays.map(nodeDot).join("")
           : `<div class="node-dot warning">未接入</div>`
       }
     </div>
@@ -177,7 +206,7 @@ function renderTopology() {
       <span class="topology-label">策略</span>
       <div class="policy-core">
         <strong>${strategies.length ? strategies.map(strategyLabel).join(" / ") : "单目标"}</strong>
-        <small>${rules.length} 条规则</small>
+        <small>${metricLabel}视图 / ${rules.length} 条规则</small>
       </div>
     </div>
     <div class="flow-lines">
@@ -189,7 +218,7 @@ function renderTopology() {
       <span class="topology-label">客户端/目标</span>
       ${
         clients.length
-          ? clients.map((node) => `<div class="node-dot ${node.status === "running" ? "online" : "warning"}">${shortName(node.name)}</div>`).join("")
+          ? clients.map(nodeDot).join("")
           : `<div class="node-dot warning">直连目标</div>`
       }
     </div>
@@ -249,10 +278,11 @@ function protocolToRelayProtocol(protocol) {
 }
 
 async function loadData() {
+  const ipRange = ipRangeFilter ? ipRangeFilter.value : "15m";
   const [overview, relayMachineItems, onlineIps, certificates, account, bootstrap] = await Promise.all([
     apiFetch("/api/overview"),
     apiFetch("/api/relay-machines"),
-    apiFetch("/api/online-ips"),
+    apiFetch(`/api/online-ips?range=${encodeURIComponent(ipRange)}`),
     apiFetch("/api/certificates"),
     apiFetch("/api/settings/account"),
     apiFetch("/api/agent/bootstrap")
@@ -593,6 +623,20 @@ function openCommandModal(role) {
     commandModal.setAttribute("aria-hidden", "false");
     return;
   }
+  if (role === "panelHttps") {
+    document.querySelector("#commandModalTitle").textContent = "HTTPS 面板安装命令（域名）";
+    commandText.textContent = bootstrapCommands.panelHttps || "";
+    commandModal.classList.add("open");
+    commandModal.setAttribute("aria-hidden", "false");
+    return;
+  }
+  if (role === "panelHttpsLocal") {
+    document.querySelector("#commandModalTitle").textContent = "HTTPS 面板安装命令（无域名）";
+    commandText.textContent = bootstrapCommands.panelHttpsLocal || "";
+    commandModal.classList.add("open");
+    commandModal.setAttribute("aria-hidden", "false");
+    return;
+  }
   const isRelay = role === "relay";
   document.querySelector("#commandModalTitle").textContent = isRelay ? "中转机器接入命令" : "客户端机器接入命令";
   commandText.textContent = isRelay ? bootstrapCommands.relay || "" : bootstrapCommands.client || "";
@@ -603,6 +647,17 @@ function openCommandModal(role) {
 function closeCommandModal() {
   commandModal.classList.remove("open");
   commandModal.setAttribute("aria-hidden", "true");
+}
+
+function openEventModal() {
+  renderEventModalList();
+  eventModal.classList.add("open");
+  eventModal.setAttribute("aria-hidden", "false");
+}
+
+function closeEventModal() {
+  eventModal.classList.remove("open");
+  eventModal.setAttribute("aria-hidden", "true");
 }
 
 async function copyCommand() {
@@ -787,7 +842,7 @@ document.querySelectorAll("[data-view-jump]").forEach((button) => {
 });
 
 document.querySelectorAll(".segmented button").forEach((button) => {
-  if (button.dataset.proxyVersion) return;
+  if (button.dataset.proxyVersion || button.dataset.topologyMode) return;
   button.addEventListener("click", () => {
     const group = button.closest(".segmented");
     group.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
@@ -805,6 +860,20 @@ if (ruleStatusFilter) {
   ruleStatusFilter.addEventListener("change", renderRules);
 }
 
+if (ipRangeFilter) {
+  ipRangeFilter.addEventListener("change", () => {
+    refreshData("在线 IP 已按时间范围刷新").catch((error) => showToast(error.message, "error"));
+  });
+}
+
+document.querySelectorAll("[data-topology-mode]").forEach((button) => {
+  button.addEventListener("click", () => {
+    topologyMode = button.dataset.topologyMode;
+    button.closest(".segmented").querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
+    renderTopology();
+  });
+});
+
 document.querySelector("#refreshDataButton").addEventListener("click", () => {
   refreshData().catch((error) => showToast(error.message, "error"));
 });
@@ -814,6 +883,8 @@ document.querySelector("#closeRuleModal").addEventListener("click", closeModal);
 document.querySelector("#cancelRuleModal").addEventListener("click", closeModal);
 document.querySelector("#closeCommandModal").addEventListener("click", closeCommandModal);
 document.querySelector("#closeCommandModal2").addEventListener("click", closeCommandModal);
+document.querySelector("#closeEventModal").addEventListener("click", closeEventModal);
+document.querySelector("#closeEventModal2").addEventListener("click", closeEventModal);
 document.querySelector("#copyCommandButton").addEventListener("click", () => {
   copyCommand().catch((error) => showToast(error.message, "error"));
 });
@@ -867,11 +938,12 @@ if (ruleImportFile) {
     importRulesFromFile(file).catch((error) => showToast(error.message, "error"));
   });
 }
-document.querySelector("#viewEventsButton").addEventListener("click", () => showToast("事件列表已按最新时间展示"));
+document.querySelector("#viewEventsButton").addEventListener("click", openEventModal);
 document.querySelector("#addClientButton").addEventListener("click", () => openCommandModal("client"));
 document.querySelector("#addRelayButton").addEventListener("click", () => openCommandModal("relay"));
 document.querySelector("#showPanelInstallButton").addEventListener("click", () => openCommandModal("panel"));
-document.querySelector("#addCertButton").addEventListener("click", () => showToast("证书申请和部署功能将在 TLS/WSS 阶段接入"));
+document.querySelector("#panelHttpsDomainButton").addEventListener("click", () => openCommandModal("panelHttps"));
+document.querySelector("#panelHttpsLocalButton").addEventListener("click", () => openCommandModal("panelHttpsLocal"));
 
 document.querySelector("#saveAccountSettings").addEventListener("click", async () => {
   setSettingsMessage("正在保存...");
@@ -901,11 +973,15 @@ ruleModal.addEventListener("click", (event) => {
 commandModal.addEventListener("click", (event) => {
   if (event.target === commandModal) closeCommandModal();
 });
+eventModal.addEventListener("click", (event) => {
+  if (event.target === eventModal) closeEventModal();
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeModal();
     closeCommandModal();
+    closeEventModal();
   }
 });
 

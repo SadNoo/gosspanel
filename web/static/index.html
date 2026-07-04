@@ -111,8 +111,8 @@
                   <p>入口节点、策略组和落地节点的当前状态</p>
                 </div>
                 <div class="segmented">
-                  <button class="active" type="button">延迟</button>
-                  <button type="button">流量</button>
+                  <button class="active" data-topology-mode="latency" type="button">延迟</button>
+                  <button data-topology-mode="traffic" type="button">流量</button>
                 </div>
               </div>
               <div class="topology" id="topologyGraph" aria-label="实时拓扑图"></div>
@@ -236,10 +236,11 @@
               <p>来自 Proxy Protocol、连接日志和规则统计</p>
             </div>
             <div class="toolbar">
-              <select aria-label="时间范围">
-                <option>最近 15 分钟</option>
-                <option>最近 1 小时</option>
-                <option>今天</option>
+              <select id="ipRangeFilter" aria-label="时间范围">
+                <option value="15m">最近 15 分钟</option>
+                <option value="1h">最近 1 小时</option>
+                <option value="today">今天</option>
+                <option value="all">全部记录</option>
               </select>
               <button class="ghost-button" id="exportIpsButton" type="button">导出 CSV</button>
             </div>
@@ -277,12 +278,15 @@
           <div class="page-head">
             <div>
               <h2>证书管理</h2>
-              <p>自动申请、续期、部署到 TLS / WSS 中转规则</p>
+              <p>面板 HTTPS 安装命令和当前证书状态</p>
             </div>
-            <button class="primary-button" id="addCertButton" type="button">
-              <span>＋</span>
-              添加证书
-            </button>
+            <div class="toolbar">
+              <button class="ghost-button" id="panelHttpsLocalButton" type="button">无域名 HTTPS</button>
+              <button class="primary-button" id="panelHttpsDomainButton" type="button">
+                <span>＋</span>
+                域名 HTTPS
+              </button>
+            </div>
           </div>
           <div class="cert-grid" id="certGrid"></div>
         </section>
@@ -332,7 +336,7 @@
         <div class="modal-head">
           <div>
             <h2 id="commandModalTitle">接入命令</h2>
-            <p>复制到目标机器执行，机器需要已安装 goss 二进制</p>
+            <p>复制到目标机器执行，脚本会安装或更新所需组件</p>
           </div>
           <button class="icon-button" id="closeCommandModal" type="button" title="关闭">×</button>
         </div>
@@ -340,6 +344,22 @@
         <div class="modal-actions">
           <button class="ghost-button" id="copyCommandButton" type="button">复制命令</button>
           <button class="primary-button" id="closeCommandModal2" type="button">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="eventModal" aria-hidden="true">
+      <div class="modal event-modal" role="dialog" aria-label="全部事件">
+        <div class="modal-head">
+          <div>
+            <h2>全部事件</h2>
+            <p>按最新时间排序</p>
+          </div>
+          <button class="icon-button" id="closeEventModal" type="button" title="关闭">×</button>
+        </div>
+        <div class="event-list modal-event-list" id="eventModalList"></div>
+        <div class="modal-actions">
+          <button class="primary-button" id="closeEventModal2" type="button">完成</button>
         </div>
       </div>
     </div>

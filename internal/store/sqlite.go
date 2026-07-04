@@ -19,6 +19,8 @@ type SQLite struct {
 	db *sql.DB
 }
 
+const nodeOfflineAfter = 30 * time.Second
+
 func OpenSQLite(ctx context.Context, path string, adminUser string, adminPassword string) (*SQLite, error) {
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -82,6 +84,7 @@ func (s *SQLite) migrate(ctx context.Context) error {
 			rule_name TEXT NOT NULL,
 			connections INTEGER NOT NULL,
 			last_active TEXT NOT NULL,
+			updated_at TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (ip, entry_node, rule_name)
 		)`,
 		`CREATE TABLE IF NOT EXISTS certificates (
@@ -122,6 +125,9 @@ func (s *SQLite) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "rules", "tunnel_endpoint", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "online_ips", "updated_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	return nil
@@ -284,7 +290,7 @@ func (s *SQLite) Overview(ctx context.Context) (domain.Overview, error) {
 	if err != nil {
 		return domain.Overview{}, err
 	}
-	onlineIPs, err := s.OnlineIPs(ctx)
+	onlineIPs, err := s.OnlineIPs(ctx, "")
 	if err != nil {
 		return domain.Overview{}, err
 	}
@@ -312,14 +318,14 @@ func (s *SQLite) Overview(ctx context.Context) (domain.Overview, error) {
 }
 
 func (s *SQLite) Nodes(ctx context.Context) ([]domain.Node, error) {
-	return s.queryNodes(ctx, `SELECT id, name, region, role, status, load, latency, traffic, last_seen FROM nodes ORDER BY role DESC, updated_at DESC, name ASC`)
+	return s.queryNodes(ctx, `SELECT id, name, region, role, status, load, latency, traffic, last_seen, updated_at FROM nodes ORDER BY role DESC, updated_at DESC, name ASC`)
 }
 
 func (s *SQLite) NodesByRole(ctx context.Context, role domain.NodeRole) ([]domain.Node, error) {
 	if role == "" {
 		return s.Nodes(ctx)
 	}
-	return s.queryNodes(ctx, `SELECT id, name, region, role, status, load, latency, traffic, last_seen FROM nodes WHERE role = ? ORDER BY updated_at DESC, name ASC`, role)
+	return s.queryNodes(ctx, `SELECT id, name, region, role, status, load, latency, traffic, last_seen, updated_at FROM nodes WHERE role = ? ORDER BY updated_at DESC, name ASC`, role)
 }
 
 func (s *SQLite) queryNodes(ctx context.Context, query string, args ...any) ([]domain.Node, error) {
@@ -332,9 +338,11 @@ func (s *SQLite) queryNodes(ctx context.Context, query string, args ...any) ([]d
 	var nodes []domain.Node
 	for rows.Next() {
 		var node domain.Node
-		if err := rows.Scan(&node.ID, &node.Name, &node.Region, &node.Role, &node.Status, &node.Load, &node.Latency, &node.Traffic, &node.LastSeen); err != nil {
+		var updatedAt string
+		if err := rows.Scan(&node.ID, &node.Name, &node.Region, &node.Role, &node.Status, &node.Load, &node.Latency, &node.Traffic, &node.LastSeen, &updatedAt); err != nil {
 			return nil, err
 		}
+		node = effectiveNodeStatus(node, updatedAt, time.Now().UTC())
 		nodes = append(nodes, node)
 	}
 	return nodes, rows.Err()
@@ -477,17 +485,25 @@ func (s *SQLite) RecordOnlineIP(ctx context.Context, item domain.OnlineIP) error
 		item.LastActive = nowLabel()
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO online_ips (ip, entry_node, rule_name, connections, last_active)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO online_ips (ip, entry_node, rule_name, connections, last_active, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(ip, entry_node, rule_name) DO UPDATE SET
 			connections = online_ips.connections + excluded.connections,
-			last_active = excluded.last_active`,
-		item.IP, item.EntryNode, item.RuleName, max(1, item.Connections), item.LastActive)
+			last_active = excluded.last_active,
+			updated_at = excluded.updated_at`,
+		item.IP, item.EntryNode, item.RuleName, max(1, item.Connections), item.LastActive, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
-func (s *SQLite) OnlineIPs(ctx context.Context) ([]domain.OnlineIP, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT ip, entry_node, rule_name, connections, last_active FROM online_ips ORDER BY connections DESC, last_active DESC LIMIT 200`)
+func (s *SQLite) OnlineIPs(ctx context.Context, window string) ([]domain.OnlineIP, error) {
+	query := `SELECT ip, entry_node, rule_name, connections, last_active FROM online_ips`
+	args := []any{}
+	if since, ok := onlineIPSince(window, time.Now().UTC()); ok {
+		query += ` WHERE updated_at != '' AND updated_at >= ?`
+		args = append(args, since.Format(time.RFC3339))
+	}
+	query += ` ORDER BY connections DESC, last_active DESC LIMIT 200`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -644,6 +660,44 @@ func newID(prefix string) string {
 
 func nowLabel() string {
 	return time.Now().Format("15:04:05")
+}
+
+func effectiveNodeStatus(node domain.Node, updatedAt string, now time.Time) domain.Node {
+	seenAt, err := time.Parse(time.RFC3339, updatedAt)
+	if err != nil {
+		return node
+	}
+	if node.Status == domain.NodeStatusRunning && now.Sub(seenAt) > nodeOfflineAfter {
+		node.Status = domain.NodeStatusOffline
+		node.Load = "离线"
+		node.Latency = "-"
+		node.LastSeen = "离线 " + formatAge(now.Sub(seenAt))
+	}
+	return node
+}
+
+func formatAge(duration time.Duration) string {
+	if duration < time.Minute {
+		return fmt.Sprintf("%d 秒", int(duration.Seconds()))
+	}
+	if duration < time.Hour {
+		return fmt.Sprintf("%d 分钟", int(duration.Minutes()))
+	}
+	return fmt.Sprintf("%d 小时", int(duration.Hours()))
+}
+
+func onlineIPSince(window string, now time.Time) (time.Time, bool) {
+	switch strings.TrimSpace(strings.ToLower(window)) {
+	case "15m", "15min":
+		return now.Add(-15 * time.Minute), true
+	case "1h", "hour":
+		return now.Add(-1 * time.Hour), true
+	case "today":
+		year, month, day := now.Date()
+		return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), true
+	default:
+		return time.Time{}, false
+	}
 }
 
 func boolInt(v bool) int {

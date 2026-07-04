@@ -178,10 +178,12 @@ func (s *Server) updateAccountSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	panelURL := externalPanelURL(r)
 	writeJSON(w, http.StatusOK, domain.AgentBootstrapCommands{
-		PanelURL: panelURL,
-		Panel:    panelInstallCommand(),
-		Relay:    agentInstallCommand(panelURL, s.cfg.AgentToken, domain.NodeRoleRelay),
-		Client:   agentInstallCommand(panelURL, s.cfg.AgentToken, domain.NodeRoleClient),
+		PanelURL:        panelURL,
+		Panel:           panelInstallCommand(),
+		PanelHTTPS:      panelHTTPSInstallCommand(),
+		PanelHTTPSLocal: panelHTTPSLocalInstallCommand(),
+		Relay:           agentInstallCommand(panelURL, s.cfg.AgentToken, domain.NodeRoleRelay),
+		Client:          agentInstallCommand(panelURL, s.cfg.AgentToken, domain.NodeRoleClient),
 	})
 }
 
@@ -343,7 +345,7 @@ func (s *Server) applyRuleImport(ctx context.Context, req domain.RuleImportReque
 }
 
 func (s *Server) onlineIPs(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.OnlineIPs(r.Context())
+	items, err := s.store.OnlineIPs(r.Context(), r.URL.Query().Get("range"))
 	writeResult(w, items, err)
 }
 
@@ -729,6 +731,14 @@ func agentTLSInstallFlag(panelURL string) string {
 
 func panelInstallCommand() string {
 	return "curl -fsSL https://raw.githubusercontent.com/SadNoo/gosspanel/main/scripts/install-panel.sh | bash"
+}
+
+func panelHTTPSInstallCommand() string {
+	return "GOSS_HTTPS=1 GOSS_DOMAIN=panel.example.com curl -fsSL https://raw.githubusercontent.com/SadNoo/gosspanel/main/scripts/install-panel.sh | bash"
+}
+
+func panelHTTPSLocalInstallCommand() string {
+	return "GOSS_HTTPS=1 curl -fsSL https://raw.githubusercontent.com/SadNoo/gosspanel/main/scripts/install-panel.sh | bash"
 }
 
 func shellQuote(value string) string {

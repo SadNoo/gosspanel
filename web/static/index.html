@@ -104,54 +104,100 @@
           </div>
 
           <div class="overview-layout">
-            <section class="panel network-panel">
-              <div class="panel-head">
-                <div>
-                  <h2>实时拓扑</h2>
-                  <p>入口节点、策略组和落地节点的当前状态</p>
+            <div class="overview-main">
+              <section class="panel network-panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>实时拓扑</h2>
+                    <p>入口节点、策略组和落地节点的当前状态</p>
+                  </div>
+                  <div class="segmented">
+                    <button class="active" data-topology-mode="latency" type="button">延迟</button>
+                    <button data-topology-mode="traffic" type="button">流量</button>
+                  </div>
                 </div>
-                <div class="segmented">
-                  <button class="active" data-topology-mode="latency" type="button">延迟</button>
-                  <button data-topology-mode="traffic" type="button">流量</button>
-                </div>
-              </div>
-              <div class="topology" id="topologyGraph" aria-label="实时拓扑图"></div>
-            </section>
+                <div class="topology" id="topologyGraph" aria-label="实时拓扑图"></div>
+              </section>
 
-            <section class="panel event-panel">
-              <div class="panel-head compact">
-                <h2>事件</h2>
-                <button class="ghost-button" id="viewEventsButton" type="button">查看全部</button>
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>规则运行概览</h2>
+                    <p>按连接数和异常状态排序</p>
+                  </div>
+                  <button class="ghost-button" data-view-jump="rules" type="button">进入规则</button>
+                </div>
+                <div class="overview-rule-strip" id="overviewRuleSummary"></div>
+                <div class="table-wrap overview-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>名称</th>
+                        <th>入口</th>
+                        <th>出口</th>
+                        <th>协议</th>
+                        <th>Proxy Protocol</th>
+                        <th>连接</th>
+                        <th>状态</th>
+                      </tr>
+                    </thead>
+                    <tbody id="overviewRules"></tbody>
+                  </table>
+                </div>
+              </section>
+
+              <div class="overview-split">
+                <section class="panel compact-panel">
+                  <div class="panel-head compact">
+                    <h2>节点健康</h2>
+                    <button class="ghost-button" data-view-jump="relays" type="button">查看节点</button>
+                  </div>
+                  <div class="health-list" id="overviewNodeHealth"></div>
+                </section>
+
+                <section class="panel compact-panel">
+                  <div class="panel-head compact">
+                    <h2>最近真实 IP</h2>
+                    <button class="ghost-button" data-view-jump="ips" type="button">查看 IP</button>
+                  </div>
+                  <div class="ip-mini-list" id="overviewRecentIps"></div>
+                </section>
               </div>
-              <div class="event-list" id="eventList"></div>
-            </section>
+            </div>
+
+            <aside class="overview-side">
+              <section class="panel event-panel">
+                <div class="panel-head compact">
+                  <h2>事件</h2>
+                  <button class="ghost-button" id="viewEventsButton" type="button">查看全部</button>
+                </div>
+                <div class="event-list" id="eventList"></div>
+              </section>
+
+              <section class="panel compact-panel">
+                <div class="panel-head compact">
+                  <h2>快捷操作</h2>
+                </div>
+                <div class="quick-actions">
+                  <button class="ghost-button" data-view-jump="rules" type="button">规则管理</button>
+                  <button class="ghost-button" data-command-role="relay" type="button">中转接入</button>
+                  <button class="ghost-button" data-command-role="client" type="button">客户端接入</button>
+                  <button class="ghost-button" data-view-jump="rules" type="button">导入导出</button>
+                </div>
+              </section>
+
+              <section class="panel compact-panel">
+                <div class="panel-head compact">
+                  <h2>当前策略</h2>
+                </div>
+                <div class="strategy-card">
+                  <strong id="overviewStrategyName">未配置</strong>
+                  <span id="overviewStrategyDetail">暂无运行规则</span>
+                </div>
+                <div class="strategy-breakdown" id="overviewStrategyBreakdown"></div>
+              </section>
+            </aside>
           </div>
-
-          <section class="panel">
-            <div class="panel-head">
-              <div>
-                <h2>重点规则</h2>
-                <p>按连接数和异常状态排序</p>
-              </div>
-              <button class="ghost-button" data-view-jump="rules" type="button">进入规则</button>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>入口</th>
-                    <th>出口</th>
-                    <th>协议</th>
-                    <th>Proxy Protocol</th>
-                    <th>连接</th>
-                    <th>状态</th>
-                  </tr>
-                </thead>
-                <tbody id="overviewRules"></tbody>
-              </table>
-            </div>
-          </section>
         </section>
 
         <section class="view" id="nodes">

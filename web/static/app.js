@@ -88,6 +88,14 @@ function emptyTable(message, colspan) {
   return `<tr><td class="empty-cell" colspan="${colspan}">${message}</td></tr>`;
 }
 
+function countBy(items, keyFn) {
+  return items.reduce((acc, item) => {
+    const key = keyFn(item);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
 function shortName(value) {
   const text = String(value || "").trim();
   if (!text) return "-";
@@ -173,6 +181,24 @@ function renderStrategySummary() {
   document.querySelector("#currentStrategyDetail").textContent = topStrategy
     ? `${topStrategy[1]} 条运行规则，${strategyDetail[topStrategy[0]] || "按规则配置执行"}`
     : "暂无运行规则";
+  const overviewName = document.querySelector("#overviewStrategyName");
+  const overviewDetail = document.querySelector("#overviewStrategyDetail");
+  const overviewBreakdown = document.querySelector("#overviewStrategyBreakdown");
+  if (overviewName) overviewName.textContent = name;
+  if (overviewDetail) {
+    overviewDetail.textContent = topStrategy
+      ? strategyDetail[topStrategy[0]] || "按规则配置执行"
+      : "暂无运行规则";
+  }
+  if (overviewBreakdown) {
+    overviewBreakdown.innerHTML = Object.entries(strategyCounts).length
+      ? Object.entries(strategyCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([strategy, count]) => `<div><span>${strategyLabel(strategy)}</span><strong>${count}</strong></div>`)
+        .join("")
+      : emptyState("暂无策略分布");
+  }
 }
 
 function renderTopology() {
@@ -336,8 +362,12 @@ function filteredRules() {
 function renderOverviewRules() {
   const visibleRules = rules
     .slice()
-    .sort((a, b) => b.connections - a.connections)
-    .slice(0, 3);
+    .sort((a, b) => {
+      const statusWeight = (status) => status === "warning" || status === "offline" ? 2 : status === "running" ? 1 : 0;
+      return statusWeight(b.status) - statusWeight(a.status) || b.connections - a.connections;
+    })
+    .slice(0, 6);
+  renderOverviewRuleSummary();
   if (!visibleRules.length) {
     document.querySelector("#overviewRules").innerHTML = emptyTable("暂无规则数据", 7);
     return;
@@ -357,6 +387,80 @@ function renderOverviewRules() {
       `
     )
     .join("");
+}
+
+function renderOverviewRuleSummary() {
+  const summary = document.querySelector("#overviewRuleSummary");
+  if (!summary) return;
+  const counts = countBy(rules, (rule) => rule.status || "unknown");
+  const items = [
+    ["running", "运行中", counts.running || 0],
+    ["warning", "异常", (counts.warning || 0) + (counts.offline || 0)],
+    ["paused", "暂停", counts.paused || 0],
+    ["total", "全部规则", rules.length]
+  ];
+  summary.innerHTML = items
+    .map(([status, label, value]) => `
+      <div class="overview-stat ${status}">
+        <span>${label}</span>
+        <strong>${value}</strong>
+      </div>
+    `)
+    .join("");
+}
+
+function renderOverviewNodeHealth() {
+  const list = document.querySelector("#overviewNodeHealth");
+  if (!list) return;
+  const allNodes = [
+    ...relayMachines.map((node) => ({ ...node, roleLabel: "中转" })),
+    ...nodes.map((node) => ({ ...node, roleLabel: "客户端" }))
+  ];
+  const visibleNodes = allNodes
+    .slice()
+    .sort((a, b) => {
+      const score = (node) => node.status === "running" ? 0 : node.status === "warning" ? 1 : 2;
+      return score(b) - score(a);
+    })
+    .slice(0, 5);
+  list.innerHTML = visibleNodes.length
+    ? visibleNodes
+      .map((node) => `
+        <div class="health-row">
+          <div>
+            <strong>${node.name}</strong>
+            <span>${node.roleLabel} / ${node.region || "-"}</span>
+          </div>
+          <div class="health-metrics">
+            <span>${node.latency || "-"}</span>
+            <span>${node.traffic || "0 B"}</span>
+          </div>
+          ${statusBadge(node.status)}
+        </div>
+      `)
+      .join("")
+    : emptyState("暂无节点接入");
+}
+
+function renderOverviewRecentIps() {
+  const list = document.querySelector("#overviewRecentIps");
+  if (!list) return;
+  list.innerHTML = ips.length
+    ? ips.slice(0, 5)
+      .map((item) => `
+        <div class="ip-mini-row">
+          <div>
+            <strong>${item.ip}</strong>
+            <span>${item.rule || "未关联规则"} / ${item.entry || "未知入口"}</span>
+          </div>
+          <div>
+            <strong>${Number(item.conns || 0).toLocaleString()}</strong>
+            <span>${item.active || "-"}</span>
+          </div>
+        </div>
+      `)
+      .join("")
+    : emptyState("暂无真实 IP 捕获");
 }
 
 function renderNodes() {
@@ -544,6 +648,8 @@ function renderAll() {
   renderTopology();
   renderEvents();
   renderOverviewRules();
+  renderOverviewNodeHealth();
+  renderOverviewRecentIps();
   renderNodes();
   renderRelayMachines();
   renderRules();
@@ -839,6 +945,10 @@ navButtons.forEach((button) => {
 
 document.querySelectorAll("[data-view-jump]").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.viewJump));
+});
+
+document.querySelectorAll("[data-command-role]").forEach((button) => {
+  button.addEventListener("click", () => openCommandModal(button.dataset.commandRole));
 });
 
 document.querySelectorAll(".segmented button").forEach((button) => {

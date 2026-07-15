@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -83,7 +82,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.auth.User(r); ok {
+	if _, ok := s.validSession(r); ok {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
@@ -109,11 +108,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		req.User = r.Form.Get("user")
 		req.Password = r.Form.Get("password")
 	}
-	if !s.checkPassword(r.Context(), req.User, req.Password) {
+	settings, ok := s.checkPassword(r.Context(), req.User, req.Password)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid user or password"))
 		return
 	}
-	s.auth.SetSession(w, req.User)
+	s.auth.SetSession(w, settings.Username, settings.UpdatedAt)
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
@@ -127,7 +127,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
-	user, _ := s.auth.User(r)
+	user, _ := s.validSession(r)
 	writeJSON(w, http.StatusOK, map[string]string{"user": user})
 }
 
@@ -151,7 +151,7 @@ func (s *Server) updateAccountSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if !constantStringEqual(req.CurrentPassword, current.Password) {
+	if !auth.VerifyPassword(req.CurrentPassword, current.Password) {
 		writeError(w, http.StatusForbidden, errors.New("current password is invalid"))
 		return
 	}
@@ -170,7 +170,12 @@ func (s *Server) updateAccountSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	s.auth.SetSession(w, next.Username)
+	updated, err := s.store.AdminSettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.auth.SetSession(w, updated.Username, updated.UpdatedAt)
 	_ = s.store.AddEvent(r.Context(), domain.Event{Level: "info", Title: "账号设置已更新", Body: next.Username, Time: time.Now().Format("15:04:05")})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "username": next.Username})
 }
@@ -480,7 +485,7 @@ func (s *Server) static() http.Handler {
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := s.auth.User(r); !ok {
+		if _, ok := s.validSession(r); !ok {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				writeError(w, http.StatusUnauthorized, errors.New("login required"))
 				return
@@ -508,12 +513,37 @@ func (s *Server) requireAgent(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) checkPassword(ctx context.Context, user string, password string) bool {
+func (s *Server) validSession(r *http.Request) (string, bool) {
+	user, version, ok := s.auth.Session(r)
+	if !ok {
+		return "", false
+	}
+	settings, err := s.store.AdminSettings(r.Context())
+	if err != nil {
+		return "", false
+	}
+	if user != settings.Username || version != settings.UpdatedAt {
+		return "", false
+	}
+	return user, true
+}
+
+func (s *Server) checkPassword(ctx context.Context, user string, password string) (domain.AdminSettings, bool) {
 	settings, err := s.store.AdminSettings(ctx)
 	if err != nil {
-		return false
+		return domain.AdminSettings{}, false
 	}
-	return constantStringEqual(user, settings.Username) && constantStringEqual(password, settings.Password)
+	if user != settings.Username || !auth.VerifyPassword(password, settings.Password) {
+		return domain.AdminSettings{}, false
+	}
+	if auth.PasswordNeedsRehash(settings.Password) {
+		if err := s.store.UpdateAdminSettings(ctx, domain.AdminSettings{Username: settings.Username, Password: password}); err != nil {
+			s.logger.Warn("admin password rehash failed", "error", err)
+		} else if updated, err := s.store.AdminSettings(ctx); err == nil {
+			settings = updated
+		}
+	}
+	return settings, true
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
@@ -675,10 +705,6 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
-}
-
-func constantStringEqual(a string, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func externalPanelURL(r *http.Request) string {

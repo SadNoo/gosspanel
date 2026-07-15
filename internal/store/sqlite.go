@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SadNoo/gosspanel/internal/auth"
 	"github.com/SadNoo/gosspanel/internal/domain"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -34,6 +35,10 @@ func OpenSQLite(ctx context.Context, path string, adminUser string, adminPasswor
 		return nil, err
 	}
 	if err := s.seed(ctx, adminUser, adminPassword); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := s.ensureAdminPasswordHash(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -271,6 +276,17 @@ func (s *SQLite) cleanupDemoData(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *SQLite) ensureAdminPasswordHash(ctx context.Context) error {
+	settings, err := s.AdminSettings(ctx)
+	if err != nil {
+		return err
+	}
+	if auth.IsPasswordHash(settings.Password) {
+		return nil
+	}
+	return s.UpdateAdminSettings(ctx, domain.AdminSettings{Username: settings.Username, Password: settings.Password})
 }
 
 func (s *SQLite) Overview(ctx context.Context) (domain.Overview, error) {
@@ -568,7 +584,7 @@ func (s *SQLite) AddEvent(ctx context.Context, event domain.Event) error {
 
 func (s *SQLite) AdminSettings(ctx context.Context) (domain.AdminSettings, error) {
 	var settings domain.AdminSettings
-	err := s.db.QueryRowContext(ctx, `SELECT username, password FROM admin_settings WHERE id = 1`).Scan(&settings.Username, &settings.Password)
+	err := s.db.QueryRowContext(ctx, `SELECT username, password, updated_at FROM admin_settings WHERE id = 1`).Scan(&settings.Username, &settings.Password, &settings.UpdatedAt)
 	return settings, err
 }
 
@@ -576,9 +592,20 @@ func (s *SQLite) UpdateAdminSettings(ctx context.Context, settings domain.AdminS
 	if settings.Username == "" {
 		return errors.New("username is required")
 	}
+	if strings.Contains(settings.Username, "|") {
+		return errors.New("username cannot contain |")
+	}
 	if settings.Password == "" {
 		return errors.New("password is required")
 	}
+	if !auth.IsPasswordHash(settings.Password) {
+		hashed, err := auth.HashPassword(settings.Password)
+		if err != nil {
+			return err
+		}
+		settings.Password = hashed
+	}
+	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO admin_settings (id, username, password, updated_at)
 		VALUES (1, ?, ?, ?)
@@ -586,7 +613,7 @@ func (s *SQLite) UpdateAdminSettings(ctx context.Context, settings domain.AdminS
 			username = excluded.username,
 			password = excluded.password,
 			updated_at = excluded.updated_at`,
-		settings.Username, settings.Password, time.Now().UTC().Format(time.RFC3339))
+		settings.Username, settings.Password, updatedAt)
 	return err
 }
 

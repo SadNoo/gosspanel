@@ -188,8 +188,9 @@ type Overview struct {
 }
 
 type AdminSettings struct {
-	Username string `json:"username"`
-	Password string `json:"-"`
+	Username  string `json:"username"`
+	Password  string `json:"-"`
+	UpdatedAt string `json:"-"`
 }
 
 type AccountUpdateRequest struct {

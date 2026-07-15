@@ -24,15 +24,9 @@ func New(cfg config.Config) *Manager {
 	return &Manager{cfg: cfg}
 }
 
-func (m *Manager) CheckPassword(user, password string) bool {
-	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(m.cfg.AdminUser)) == 1
-	passOK := subtle.ConstantTimeCompare([]byte(password), []byte(m.cfg.AdminPassword)) == 1
-	return userOK && passOK
-}
-
-func (m *Manager) SetSession(w http.ResponseWriter, user string) {
+func (m *Manager) SetSession(w http.ResponseWriter, user string, version string) {
 	expires := time.Now().Add(24 * time.Hour)
-	payload := fmt.Sprintf("%s|%d", user, expires.Unix())
+	payload := fmt.Sprintf("%s|%d|%s", user, expires.Unix(), version)
 	sig := m.sign(payload)
 	value := base64.RawURLEncoding.EncodeToString([]byte(payload + "|" + sig))
 	http.SetCookie(w, &http.Cookie{
@@ -58,27 +52,32 @@ func (m *Manager) ClearSession(w http.ResponseWriter) {
 }
 
 func (m *Manager) User(r *http.Request) (string, bool) {
+	user, _, ok := m.Session(r)
+	return user, ok
+}
+
+func (m *Manager) Session(r *http.Request) (string, string, bool) {
 	cookie, err := r.Cookie(CookieName)
 	if err != nil || cookie.Value == "" {
-		return "", false
+		return "", "", false
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(cookie.Value)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	parts := strings.Split(string(raw), "|")
-	if len(parts) != 3 {
-		return "", false
+	if len(parts) != 4 {
+		return "", "", false
 	}
-	payload := parts[0] + "|" + parts[1]
-	if !hmac.Equal([]byte(parts[2]), []byte(m.sign(payload))) {
-		return "", false
+	payload := parts[0] + "|" + parts[1] + "|" + parts[2]
+	if !hmac.Equal([]byte(parts[3]), []byte(m.sign(payload))) {
+		return "", "", false
 	}
 	expires, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil || time.Now().Unix() > expires {
-		return "", false
+		return "", "", false
 	}
-	return parts[0], true
+	return parts[0], parts[2], true
 }
 
 func (m *Manager) CheckAgentToken(r *http.Request) bool {
